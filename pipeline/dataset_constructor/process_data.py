@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 
 from common.constants import TONE_MAPPING_PATH
 from common.config import Config, SingletonMeta
-from model.bert2bert_model import QG_EncoderDecoderModel
+from trainer.model.bartpho import BartPhoPointer
 
 
 class Normalizer(metaclass=SingletonMeta):
@@ -103,7 +103,7 @@ class ShopeeProcessor:
     def __init__(self, model_path: str):
         self.normalizer = Normalizer()
 
-        self.qg_model = QG_EncoderDecoderModel.from_pretrained(model_path, training_config={"use_pointer": True})
+        self.qg_model = BartPhoPointer.from_pretrained(model_path, training_config={"use_pointer": True})
         self.qg_tokenizer = AutoTokenizer.from_pretrained(model_path)
 
     def load_data(self, input_folder: str):

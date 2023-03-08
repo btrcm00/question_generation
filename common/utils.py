@@ -237,11 +237,9 @@ class ModelUtils(metaclass=SingletonMeta):
         if ans_type is None:
             ans_type = ans_lst[0]
         answer_chunk = f"<{ans_type}> {answer} </{ans_type}>"
-        passage = passage[:ans_lst[1]] + answer_chunk + passage[ans_lst[2]:]
-        split_passage = passage.split(" . ")
-        passage_ans_clue = " ".join(
-            f"{ModelInputTag.clue} {ele} {ModelInputTag.close_clue} ." if answer_chunk in ele else f"{ele} ." for ele in
-            split_passage)
+        passage_ans_clue = passage[:ans_lst[1]] + answer_chunk + passage[ans_lst[2]:]
+        # split_passage = passage.split(" . ")
+        # passage_ans_clue = " ".join( f"{ele} ." for ele in split_passage)
         passage_ans_clue = self.truncate_passage(f"<{ques_type}> {passage_ans_clue}")
         return passage_ans_clue
 
@@ -279,9 +277,7 @@ class ModelUtils(metaclass=SingletonMeta):
             _data[PASSAGE] = passage_ans_clue
             output.append(_data)
             bar.update(1)
-            print(bar.total, bar.n, bar.n == bar.total)
             if bar.n == bar.total:
-                print("ENDDDDDDDDD")
                 e.set()
                 break
 
@@ -393,7 +389,6 @@ class ModelUtils(metaclass=SingletonMeta):
             output_ner_dict[passage[temp_lst[1]: temp_lst[2]]] = temp_lst
         return output_ner_dict
 
-    @timer
     def get_entity_from_passage(self, passage, is_segmented_list: bool = False):
         """
         This func to get entities from passage
@@ -413,7 +408,7 @@ class ModelUtils(metaclass=SingletonMeta):
             entity_dict: dictionary that contain entities and its start and end index
             passage_: passage corresponding to position of entities, use this returned passage to properly get true entities position.
         """
-        assert is_segmented_list and isinstance(passage, list), "ERROR!!!!!!!!"
+        assert not is_segmented_list or isinstance(passage, list), "ERROR!!!!!!!!"
         ner_dict = {}
         if is_segmented_list:
             processed_passage = []
@@ -426,11 +421,15 @@ class ModelUtils(metaclass=SingletonMeta):
             if temp_p:
                 processed_passage.append(temp_p)
         else:
-            processed_passage = [[0, passage]]
+            processed_passage = [passage]
 
         out_passage = ""
         count = 0
         for sub_passage in processed_passage:
+            if not isinstance(sub_passage, str):
+                print(processed_passage)
+                import sys
+                sys.exit()
             count += 1
             # output = requests.post(url=Config.ner_url,
             #                        json={"text": sub_passage.replace("_", " "), "keep_format": True}).json()

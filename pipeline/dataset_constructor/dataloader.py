@@ -25,17 +25,17 @@ def get_ner_in_tensor(input_ids, ner_list, tokenizer):
 
 
 class FQG_dataset(Dataset):
-    def __init__(self, config: PipelineConfig, mode='train', tokenizer=None, added_new_special_tokens=False,
+    def __init__(self, config: PipelineConfig=None, mode='train', tokenizer=None, added_new_special_tokens=False,
                  model_type="marian"):
         super().__init__()
         assert mode in ["train", "dev", "test"], "train should be 'train', 'dev' or 'test'"
 
         self.mode = mode
-        self.config = config
+        self.config = config if config is not None else PipelineConfig()
 
         if not tokenizer:
-            assert config.pipeline_pretrained_path is not None, "You have to specify tokenizer path if tokenizer is None"
-            self.tokenizer = AutoTokenizer.from_pretrained(config.pipeline_pretrained_path, use_fast=False)
+            assert self.config.pipeline_pretrained_path is not None, "You have to specify tokenizer path if tokenizer is None"
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path, use_fast=False)
         else:
             self.tokenizer = tokenizer
 
@@ -46,7 +46,7 @@ class FQG_dataset(Dataset):
             special_tokens_dict = {"additional_special_tokens": [f"<{tk.upper()}>" for tk in new_special_tokens]}
             self.tokenizer.add_special_tokens(special_tokens_dict)
 
-        self.data = self.load_data(path=f"{config.pipeline_dataset_folder}/processed", mode=mode)
+        self.data = self.load_data(path=f"{self.config.pipeline_dataset_folder}/processed", mode=mode)
         self.model_type = model_type
 
     def __len__(self):
@@ -85,7 +85,7 @@ class FQG_dataset(Dataset):
         data = []
         for file in os.listdir(path):
             if mode in file:  # and file.endswith(".pkl"):
-                data += load_file(path + file)
+                data += load_file(f"{path}/{file}")
                 data = [ele for ele in data if ele[MODEL_QUESTION_TYPE_INPUT].upper() not in ["OTHER", "BOOLEAN"]]
         random.shuffle(data)
         print(f"Loaded {len(data)} examples in {mode} dataset ...")

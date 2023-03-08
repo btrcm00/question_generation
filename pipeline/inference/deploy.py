@@ -3,10 +3,10 @@ from flask import Flask, request, jsonify
 
 from common.common_keys import *
 from common.config import PipelineConfig, Config
-from inference.sampling_pipeline import QuestionSampler
+from pipeline.inference.sampling_pipeline import QuestionSampler
 # from inference.refactor_pipeline import QuestionSampler
 from common.constants import *
-from model.bartpho import BartPhoPointer
+from pipeline.trainer.model.bartpho import BartPhoPointer
 
 app = Flask(__name__)
 
@@ -25,6 +25,8 @@ def mbart_config():
     parser.add_argument('--model_device', default="cpu", type=str)
     parser.add_argument('--parallel_input_processing', action='store_true')
     parser.add_argument('--inference_batch_size', default=4, type=int)
+    parser.add_argument("--training_logging_dir", default=f"{OUTPUT_PATH}/logging/logging_bart_7_3/", type=str,
+                                 help="Tensorboard Logging Folder")
     return parser.parse_args()
 
 
@@ -35,7 +37,8 @@ config = PipelineConfig(
     pipeline_output_max_length=bart_config.output_max_length,
     pipeline_device=bart_config.model_device,
     sampling_parallel_input_processing=bart_config.parallel_input_processing,
-    sampling_inference_batch_size=bart_config.inference_batch_size
+    sampling_inference_batch_size=bart_config.inference_batch_size,
+    training_logging_dir=bart_config.training_logging_dir
 )
 sampler = QuestionSampler(config)
 

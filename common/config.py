@@ -95,70 +95,74 @@ class PipelineConfig:
                  sampling_return_entity: bool = None
                  ):
         self.training_output_dir = training_output_dir if training_output_dir is not None \
-                                       else os.getenv(TRAINING_OUTPUT_DIR, None),
+                                       else os.getenv(TRAINING_OUTPUT_DIR, None)
         self.training_logging_dir = training_logging_dir if training_logging_dir is not None \
-                                        else os.getenv(TRAINING_LOGGING_DIR, None),
+                                        else os.getenv(TRAINING_LOGGING_DIR, None)
         self.training_batch_size = training_batch_size if training_batch_size is not None \
-                                       else int(os.getenv(TRAINING_BATCH_SIZE, "4")),
+                                       else int(os.getenv(TRAINING_BATCH_SIZE, "4"))
         self.training_weight_decay = training_weight_decay if training_weight_decay is not None \
-                                         else float(os.getenv(TRAINING_WEIGHT_DECAY, "0.1")),
+                                         else float(os.getenv(TRAINING_WEIGHT_DECAY, "0.1"))
         self.training_save_total_limit = training_save_total_limit if training_save_total_limit is not None \
-                                             else int(os.getenv(TRAINING_SAVE_TOTAL_LIMIT, "5")),
+                                             else int(os.getenv(TRAINING_SAVE_TOTAL_LIMIT, "5"))
         self.training_learning_rate = training_learning_rate if training_learning_rate is not None \
-                                          else float(os.getenv(TRAINING_LEARNING_RATE, "0.1")),
+                                          else float(os.getenv(TRAINING_LEARNING_RATE, "0.1"))
         self.training_gradient_accumulation_steps = training_gradient_accumulation_steps if training_gradient_accumulation_steps is not None \
-                                                        else int(os.getenv(TRAINING_GRADIENT_ACCUMULATION_STEPS, "2")),
+                                                        else int(os.getenv(TRAINING_GRADIENT_ACCUMULATION_STEPS, "2"))
         self.training_eval_steps = training_eval_steps if training_eval_steps is not None \
-                                       else int(os.getenv(TRAINING_EVAL_STEPS, "2000")),
+                                       else int(os.getenv(TRAINING_EVAL_STEPS, "2000"))
         self.training_logging_steps = training_logging_steps if training_logging_steps is not None \
-                                          else int(os.getenv(TRAINING_LOGGING_STEPS, "2000")),
+                                          else int(os.getenv(TRAINING_LOGGING_STEPS, "2000"))
         self.training_save_steps = training_save_steps if training_save_steps is not None \
-                                       else int(os.getenv(TRAINING_SAVE_STEPS, "2000")),
+                                       else int(os.getenv(TRAINING_SAVE_STEPS, "2000"))
         self.training_num_epochs = training_num_epochs if training_num_epochs is not None \
-                                       else int(os.getenv(TRAINING_NUM_EPOCHS, "20")),
+                                       else int(os.getenv(TRAINING_NUM_EPOCHS, "20"))
         self.training_restore_checkpoint = training_restore_checkpoint if training_restore_checkpoint is not None \
-                                               else bool(os.getenv(TRAINING_RESTORE_CHECKPOINT, "1")),
+                                               else bool(os.getenv(TRAINING_RESTORE_CHECKPOINT, "1"))
         self.training_restore_folder = training_restore_folder if training_restore_folder is not None \
-                                           else os.getenv(TRAINING_RESTORE_FOLDER, None),
+                                           else os.getenv(TRAINING_RESTORE_FOLDER, None)
         self.training_generation_num_beams = training_generation_num_beams if training_generation_num_beams is not None \
-                                                 else int(os.getenv(TRAINING_GENERATION_NUM_BEAMS, "5")),
+                                                 else int(os.getenv(TRAINING_GENERATION_NUM_BEAMS, "5"))
         self.training_metrics = training_metrics if training_metrics is not None \
-                                    else os.getenv(TRAINING_METRICS, "bleu"),
+                                    else os.getenv(TRAINING_METRICS, "bleu")
         self.training_warm_up_ratio = training_warm_up_ratio if training_warm_up_ratio is not None \
-                                          else float(os.getenv(TRAINING_WARM_UP_RATIO, "0.1")),
+                                          else float(os.getenv(TRAINING_WARM_UP_RATIO, "0.1"))
         self.training_use_pointer = training_use_pointer if training_use_pointer is not None \
-                                        else bool(os.getenv(TRAINING_USE_POINTER, "True")),
+                                        else bool(os.getenv(TRAINING_USE_POINTER, "True"))
 
         self.pipeline_output_max_length = pipeline_output_max_length if pipeline_output_max_length is not None \
-                                              else int(os.getenv(PIPELINE_OUTPUT_MAX_LENGTH, "256")),
+                                              else int(os.getenv(PIPELINE_OUTPUT_MAX_LENGTH, "256"))
         self.pipeline_input_max_length = pipeline_input_max_length if pipeline_input_max_length is not None \
-                                             else int(os.getenv(PIPELINE_INPUT_MAX_LENGTH, "512")),
+                                             else int(os.getenv(PIPELINE_INPUT_MAX_LENGTH, "512"))
         self.pipeline_dataset_folder = pipeline_dataset_folder if pipeline_dataset_folder is not None \
-                                           else os.getenv(PIPELINE_DATASET_FOLDER, None),
+                                           else os.getenv(PIPELINE_DATASET_FOLDER, None)
         self.pipeline_pretrained_path = pipeline_pretrained_path if pipeline_pretrained_path is not None \
-                                            else os.getenv(PIPELINE_PRETRAINED_PATH, None),
+                                            else os.getenv(PIPELINE_PRETRAINED_PATH)
         self.pipeline_special_tokens_path = pipeline_special_tokens_path if pipeline_special_tokens_path is not None \
-                                                else os.getenv(PIPELINE_SPECIAL_TOKENS_PATH, None),
+                                                else os.getenv(PIPELINE_SPECIAL_TOKENS_PATH, None)
         self.pipeline_device = pipeline_device if pipeline_device is not None \
-                                   else os.getenv(PIPELINE_DEVICE, "cpu"),
+                                   else os.getenv(PIPELINE_DEVICE, "cpu")
 
         self.constructor_num_of_threads = constructor_num_of_threads if constructor_num_of_threads is not None \
-                                              else int(os.getenv(CONSTRUCTOR_NUM_OF_THREADS, "5")),
+                                              else int(os.getenv(CONSTRUCTOR_NUM_OF_THREADS, "5"))
         self.constructor_ratio = constructor_ratio if constructor_ratio is not None \
-                                     else os.getenv(CONSTRUCTOR_RATIO, None),
+                                     else os.getenv(CONSTRUCTOR_RATIO)
+        count = 0
+        while self.constructor_ratio is not None and not isinstance(self.constructor_ratio, list) and count < 5:
+            self.constructor_ratio = eval(self.constructor_ratio)
+            count += 1
 
         self.sampling_parallel_input_processing = sampling_parallel_input_processing if sampling_parallel_input_processing is not None \
-                                                      else bool(os.getenv(SAMPLING_PARALLEL_INPUT_PROCESSING, "1")),
+                                                      else bool(os.getenv(SAMPLING_PARALLEL_INPUT_PROCESSING, "1"))
         self.sampling_inference_batch_size = sampling_inference_batch_size if sampling_inference_batch_size is not None \
-                                                 else int(os.getenv(SAMPLING_INFERENCE_BATCH_SIZE, "4")),
+                                                 else int(os.getenv(SAMPLING_INFERENCE_BATCH_SIZE, "4"))
         self.sampling_dataset_folder = sampling_dataset_folder if sampling_dataset_folder is not None \
-                                           else os.getenv(SAMPLING_DATASET_FOLDER, None),
+                                           else os.getenv(SAMPLING_DATASET_FOLDER, None)
         self.sampling_type = sampling_type if sampling_type is not None \
-                                 else os.getenv(SAMPLING_TYPE, None),
+                                 else os.getenv(SAMPLING_TYPE, None)
         self.sampling_verify = sampling_verify if sampling_verify is not None \
-                                   else bool(os.getenv(SAMPLING_VERIFY, "")),
+                                   else bool(os.getenv(SAMPLING_VERIFY, ""))
         self.sampling_return_entity = sampling_return_entity if sampling_return_entity is not None \
-                                          else int(os.getenv(SAMPLING_RETURN_ENTITY, "1")),
+                                          else bool(os.getenv(SAMPLING_RETURN_ENTITY, "1"))
 
 
 class QuestionType(Enum):

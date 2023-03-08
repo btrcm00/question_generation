@@ -12,11 +12,11 @@ from common.common_keys import *
 from common.config import QuestionType, PipelineConfig
 from common.constants import *
 from dataset_constructor.dataloader import FQG_dataset
-from model.bartpho import BartPhoPointer
-from trainer.seq2seq_trainer import QGTrainer
+from trainer.model.bartpho import BartPhoPointer
+from backup.trainer.seq2seq_trainer import QGTrainer
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 
@@ -38,7 +38,7 @@ def model_config():
     training_parser.add_argument("--save_steps", default=5, type=int, help="Num Steps per saving ")
     training_parser.add_argument("--device", default="cpu", type=str, help="Visible Cuda")
     training_parser.add_argument("--num_train_epochs", default=1, type=int, help="Num Epochs")
-    training_parser.add_argument("--restore_checkpoint", default=True, type=bool)
+    training_parser.add_argument("--restore_checkpoint", action='store_false')
     training_parser.add_argument("--restore_folder",
                                  default=INFERENCE_PATH + "/checkpoint/bartpho_pointer_22_9/",
                                  type=str)
@@ -57,21 +57,20 @@ def model_config():
     training_parser.add_argument('--input_max_length', default=512, type=int,
                                  help='maximum context token number')
 
-    training_parser.add_argument('--use_pointer', default=True, type=bool,
-                                 help='whether or not using pointer generator in training model')
+    training_parser.add_argument('--use_pointer', action='store_true', help='whether or not using pointer generator in training model')
 
     return training_parser.parse_args()
 
 
 class ModelTrainer:
-    def __init__(self, config: PipelineConfig):
-        self.config = config
+    def __init__(self, config: PipelineConfig = None):
+        self.config = config if config is not None else PipelineConfig()
         self.metric = load_metric("sacrebleu")
-        self.sent_limit = config.pipeline_input_max_length
+        self.sent_limit = self.config.pipeline_input_max_length
         self.tokenizer: AutoTokenizer
-        if not config.training_restore_checkpoint:
+        if not self.config.training_restore_checkpoint:
             # add new special tokens
-            self.tokenizer = AutoTokenizer.from_pretrained(config.pipeline_pretrained_path)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path)
             new_special_tokens = json.load(open(SPECIAL_TOKENS_PATH))[
                                      SPECIAL_TOKENS] + [e.name for e in QuestionType]
             special_tokens_dict = {
@@ -80,8 +79,8 @@ class ModelTrainer:
             # ==========================================
 
             self.model = BartPhoPointer.from_pretrained(
-                config.pipeline_pretrained_path,
-                model_config=config
+                self.config.pipeline_pretrained_path,
+                model_config=self.config
             )
             # resize embeddings of encoder and decoder
             self.model.resize_token_embeddings(len(self.tokenizer.get_vocab()))
@@ -89,12 +88,14 @@ class ModelTrainer:
             # model = BartPhoPointer.from_pretrained(config.training_restore_folder,
             #                                        model_config=training_config.__dict__)
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(config.training_restore_folder)
-            self.model = BartPhoPointer.from_pretrained(config.training_restore_folder,
-                                                        model_config=config.__dict__)
-        self.model.to(config.pipeline_device)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.config.training_restore_folder)
+            self.model = BartPhoPointer.from_pretrained(self.config.training_restore_folder,
+                                                        model_config=self.config.__dict__)
+        
+        self.model_device = self.config.pipeline_device
+        self.model.to(self.config.pipeline_device)
         self.train_dataset, self.valid_dataset, self.test_dataset = FQG_dataset.get_dataset(
-            config=PipelineConfig(**vars(config)),
+            config=self.config,
             tokenizer=self.tokenizer,
             added_new_special_tokens=True
         )
@@ -144,7 +145,7 @@ class ModelTrainer:
         result = {k: round(v, 4) for k, v in result.items()}
         return result
 
-    def main(self):
+    def run(self):
         training_args = Seq2SeqTrainingArguments(
             output_dir=self.config.training_output_dir,
             evaluation_strategy=IntervalStrategy.STEPS,
@@ -158,7 +159,7 @@ class ModelTrainer:
             predict_with_generate=True,
             gradient_accumulation_steps=self.config.training_gradient_accumulation_steps,
             eval_steps=self.config.training_eval_steps,
-            fp16=True,
+            fp16=self.model_device=="cuda",
             push_to_hub=False,
             # dataloader_pin_memory=True,
             dataloader_num_workers=2,
@@ -188,35 +189,34 @@ class ModelTrainer:
 
         _trainer.train(resume_from_checkpoint=self.config.training_restore_checkpoint)
         # print(trainer.evaluate(valid_dataset))
-        # with mlflow.start_run():
 
 
 if __name__ == "__main__":
-    training_config = model_config()
+#     training_config = model_config()
 
-    config = PipelineConfig(
-        training_output_dir=training_config.output_dir,
-        training_use_pointer=training_config.use_pointer,
-        pipeline_input_max_length=training_config.input_max_length,
-        pipeline_output_max_length=training_config.generation_max_length,
-        training_warm_up_ratio=training_config.warm_up_ratio,
-        training_metrics=training_config.metric_for_best_model,
-        training_generation_num_beams=training_config.generation_num_beams,
-        pipeline_pretrained_path=training_config.pretrained_path,
-        pipeline_dataset_folder=training_config.dataset_folder,
-        training_restore_folder=training_config.restore_folder,
-        training_restore_checkpoint=training_config.restore_checkpoint,
-        training_num_epochs=training_config.num_train_epochs,
-        pipeline_device=training_config.device,
-        training_save_steps=training_config.save_steps,
-        training_logging_steps=training_config.logging_steps,
-        training_eval_steps=training_config.eval_steps,
-        training_gradient_accumulation_steps=training_config.gradient_accumulation_steps,
-        training_learning_rate=training_config.lr,
-        training_save_total_limit=training_config.save_total_limit,
-        training_weight_decay=training_config.weight_decay,
-        training_batch_size=training_config.batch_size,
-        training_logging_dir=training_config.logging_dir,
-    )
-    trainer = ModelTrainer(config=config)
-    trainer.main()
+#     config = PipelineConfig(
+#         training_output_dir=training_config.output_dir,
+#         training_use_pointer=training_config.use_pointer,
+#         pipeline_input_max_length=training_config.input_max_length,
+#         pipeline_output_max_length=training_config.generation_max_length,
+#         training_warm_up_ratio=training_config.warm_up_ratio,
+#         training_metrics=training_config.metric_for_best_model,
+#         training_generation_num_beams=training_config.generation_num_beams,
+#         pipeline_pretrained_path=training_config.pretrained_path,
+#         pipeline_dataset_folder=training_config.dataset_folder,
+#         training_restore_folder=training_config.restore_folder,
+#         training_restore_checkpoint=training_config.restore_checkpoint,
+#         training_num_epochs=training_config.num_train_epochs,
+#         pipeline_device=training_config.device,
+#         training_save_steps=training_config.save_steps,
+#         training_logging_steps=training_config.logging_steps,
+#         training_eval_steps=training_config.eval_steps,
+#         training_gradient_accumulation_steps=training_config.gradient_accumulation_steps,
+#         training_learning_rate=training_config.lr,
+#         training_save_total_limit=training_config.save_total_limit,
+#         training_weight_decay=training_config.weight_decay,
+#         training_batch_size=training_config.batch_size,
+#         training_logging_dir=training_config.logging_dir,
+#     )
+    trainer = ModelTrainer()
+    trainer.run()

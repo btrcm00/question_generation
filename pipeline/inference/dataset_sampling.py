@@ -11,7 +11,7 @@ from common.constants import *
 from common.config import SingletonMeta, QuestionType, ModelInputTag, SamplingType, PipelineConfig
 from common.utils import pre_process
 from inference.sampling_pipeline import QuestionSampler
-from model.bartpho import BartPhoPointer
+from trainer.model.bartpho import BartPhoPointer
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"

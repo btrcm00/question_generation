@@ -1,56 +1,33 @@
 import math
-import os
-import json
 import regex as re
 import torch
 
 from transformers import AutoTokenizer
 from tqdm import tqdm
-from queue import Queue
 from multiprocessing import Process, Manager
-from threading import Thread, Event
 
 from common.common_keys import *
-from common.config import Config, ModelInputTag
+from common.config import *
 from common.utils import ModelUtils, pre_process, timer
-from model.bartpho import BartPhoPointer
+from pipeline.trainer.model.bartpho import BartPhoPointer
 
 
 class QuestionSampler:
-    def __init__(
-            self,
-            input_max_length: int = None,
-            output_max_length: int = None,
-            folder_checkpoint: str = None,
-            model_type=None,
-            inference_batch_size: int = 4,
-            model_device: str = "cpu",
-            return_entity: bool = False,
-            need_verify: bool = False,
-            parallel_input_processing: bool = False,
-            num_of_threads: int = 4
-    ):
-        """_summary_
+    def __init__(self, config: PipelineConfig):
 
-        Args:
-            input_max_length (int, optional): max length of model input. Defaults to None.
-            folder_checkpoint (str, optional): folder contain checkpoint to load pretrained. Defaults to None.
-        """
-
-        self.device = model_device
-        self.return_entity = return_entity
-        self.need_verify = need_verify
-        self.input_max_length = input_max_length
-        self.output_max_length = output_max_length
-        self.parallel_input_processing = parallel_input_processing
-        self.inference_batch_size = inference_batch_size
-        self.best_checkpoint_path = self.get_best_checkpoint(folder_checkpoint)
+        self.device = config.pipeline_device
+        self.return_entity = config.sampling_return_entity
+        self.need_verify = config.sampling_verify
+        self.input_max_length = config.pipeline_input_max_length
+        self.output_max_length = config.pipeline_output_max_length
+        self.parallel_input_processing = config.sampling_parallel_input_processing
+        self.inference_batch_size = config.sampling_inference_batch_size
+        self.best_checkpoint_path = self.get_best_checkpoint(config.training_output_dir)
         if not self.best_checkpoint_path:
             raise "NOT FIND MODEL WITH INPUT PATH"
-        self.model, self.tokenizer = self.load_checkpoint(model_type=model_type,
+        self.model, self.tokenizer = self.load_checkpoint(model_type=BartPhoPointer,
                                                           pretrained_path=self.best_checkpoint_path)
-        self.model_utils = ModelUtils(input_max_length=input_max_length, tokenizer=self.tokenizer)
-        self.num_of_threads = num_of_threads
+        self.model_utils = ModelUtils(input_max_length=config.pipeline_input_max_length, tokenizer=self.tokenizer)
 
     @staticmethod
     def get_best_checkpoint(folder_checkpoint: str = None):
@@ -203,22 +180,16 @@ class QuestionSampler:
 
             for ques_type in ques_type_list:
                 types = ques_type.upper().replace(" ", "_")
-                # passage_ans_clue = self.model_utils.prepare_model_input(passage=processed_passage, answer=ent,
-                #                                                         ans_lst=ner_lst, ques_type=types)
+                passage_ans_clue = self.model_utils.prepare_model_input(passage=processed_passage, answer=ent,
+                                                                        ans_lst=ner_lst, ques_type=types)
                 if self.parallel_input_processing:
-                    # output_lst.append({
-                    #     PASSAGE: passage_ans_clue,
-                    #     ANSWER: ent,
-                    #     QUESTION_TYPE: types
-                    # })
                     output_lst.append({
-                        PASSAGE: processed_passage,
+                        PASSAGE: passage_ans_clue,
                         ANSWER: ent,
-                        "ans_lst": ner_lst,
                         QUESTION_TYPE: types
                     })
                 else:
-                    passage_lst.append(processed_passage)
+                    passage_lst.append(passage_ans_clue)
                     answer_lst.append(ent)
                     ques_type_lst.append(types)
         if not self.parallel_input_processing:
@@ -229,16 +200,18 @@ class QuestionSampler:
         passage_lst, answer_lst, ques_type_lst = [], [], []
 
         ques_type_mapping = Config.ques_type_config.get("POS", {})
+
         all_tag_lst = []
         for lst in ques_type_mapping.values():
             all_tag_lst += lst
-            
+
         chunk_of_answer_lst, pos_passage = self.model_utils.get_chunk(tokenized_passage, tag_lst=all_tag_lst,
-                                                                    is_segmented=is_segmented)
+                                                                      is_segmented=is_segmented)
         for _type, tag_lst in ques_type_mapping.items():
             ques_type = _type.upper().replace(" ", "_")
+            # chunk_of_answer, pos_passage = self.model_utils.get_chunk(tokenized_passage, tag_lst=tag_lst,
+            #                                                           is_segmented=is_segmented)
             chunk_of_answer = [chunk for chunk in chunk_of_answer_lst if chunk[1].upper() in tag_lst]
-            
             for ans in chunk_of_answer:
                 answer = " ".join(ans[2])
                 answer_start_idx = len(" ".join(pos_passage[:ans[-2]]))
@@ -247,23 +220,17 @@ class QuestionSampler:
                 if ans[-2] != 0:
                     answer_start_idx += 1
                 ans_lst = ["ANS", answer_start_idx, answer_start_idx + len(answer)]
-                # passage_ans_clue = self.model_utils.prepare_model_input(passage=" ".join(pos_passage), answer=answer,
-                #                                                         ans_lst=ans_lst, ans_type="ANS",
-                #                                                         ques_type=ques_type)
+                passage_ans_clue = self.model_utils.prepare_model_input(passage=" ".join(pos_passage), answer=answer,
+                                                                        ans_lst=ans_lst, ans_type="ANS",
+                                                                        ques_type=ques_type)
                 if self.parallel_input_processing:
-                    # output_lst.append({
-                    #     PASSAGE: " ".join(pos_passage),
-                    #     ANSWER: answer,
-                    #     QUESTION_TYPE: ques_type
-                    # })
                     output_lst.append({
-                        PASSAGE: " ".join(pos_passage),
+                        PASSAGE: passage_ans_clue,
                         ANSWER: answer,
-                        "ans_lst": ans_lst,
                         QUESTION_TYPE: ques_type
                     })
                 else:
-                    passage_lst.append(" ".join(pos_passage))
+                    passage_lst.append(passage_ans_clue)
                     answer_lst.append(answer)
                     ques_type_lst.append(ques_type)
         if not self.parallel_input_processing:
@@ -280,55 +247,7 @@ class QuestionSampler:
             proc.append(p)
         for p in proc:
             p.join()
-
         return output
-
-    def testttt(self, input_dict):
-        output = []
-        input_queue = Queue(maxsize=1000)
-        bar = tqdm(total=len(input_dict), initial=0, leave=True)
-
-        event = Event()
-        event.clear()
-
-        threads = [Thread(target=self.model_utils.prepare_model_input_threading, args=(bar, output, input_queue, event), daemon=True)
-                   for _ in range(40)]
-
-        [thread.start() for thread in threads]
-
-        for ele in input_dict:
-            input_queue.put(ele)
-
-        event.set()
-        [thread.join() for thread in threads]
-        return output
-    
-    def input_sampling_with_thread(self, tokenized_passage, is_segmented: bool = True):
-        output = []
-
-        input_dict = self.run_input_sampling_parallel(tokenized_passage=tokenized_passage, is_segmented=is_segmented)
-        entity_dict = input_dict.pop(0)
-        print(f"{len(input_dict)} examples")
-        output = self.testttt(input_dict)
-        print(4444444444444)
-        # input_queue = Queue(maxsize=1000)
-        # bar = tqdm(total=len(input_dict), initial=0, leave=True)
-
-        # event = Event()
-        # event.clear()
-
-        # threads = [Thread(target=self.model_utils.prepare_model_input_threading, args=(bar, output, input_queue, event), daemon=True)
-        #            for _ in range(self.num_of_threads)]
-
-        # [thread.start() for thread in threads]
-
-        # for ele in input_dict:
-        #     input_queue.put(ele)
-
-        # event.set()
-        # [thread.join() for thread in threads]
-
-        return output, entity_dict
 
     @pre_process
     @timer
@@ -350,16 +269,16 @@ class QuestionSampler:
 
         passage_lst, answer_lst, ques_type_lst = [], [], []
         if self.parallel_input_processing:
-            output, entity_dict = self.input_sampling_with_thread(tokenized_passage, is_segmented=is_segmented)
-            # entity_dict = output.pop(0)
+            output = self.run_input_sampling_parallel(tokenized_passage, is_segmented=is_segmented)
+            entity_dict = output.pop(0)
             for ele in output:
                 passage_lst.append(ele[PASSAGE])
                 answer_lst.append(ele[ANSWER])
                 ques_type_lst.append(ele[QUESTION_TYPE])
         else:
-            ner_passage, ner_answer, ner_ques_type, entity_dict = self.get_input_sampling_with_entity(tokenized_passage,[],
+            ner_passage, ner_answer, ner_ques_type, entity_dict = self.get_input_sampling_with_entity(tokenized_passage,
                                                                                                       is_segmented=is_segmented)
-            pos_passage, pos_answer, pos_ques_type = self.get_input_sampling_with_pos(tokenized_passage, [],
+            pos_passage, pos_answer, pos_ques_type = self.get_input_sampling_with_pos(tokenized_passage,
                                                                                       is_segmented=is_segmented)
             passage_lst = ner_passage + pos_passage
             answer_lst = ner_answer + pos_answer
@@ -380,7 +299,7 @@ class QuestionSampler:
             return []
 
         samplings = []
-        print(f"START INFERENCE {len(passage_lst)} examples ...")
+        print(f"START INFERENCE {len(passage_lst)} examples with batch_size {self.inference_batch_size} ...")
         # start_gen = time.time()
         predict_pointer = self.inference(processed_passages=passage_lst, num_return_sequences=num_return_sequences,
                                          num_beams=num_beams)

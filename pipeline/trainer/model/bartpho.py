@@ -17,12 +17,8 @@ class BartPhoPointer(MBartForConditionalGeneration):
     def __init__(self, config: MBartConfig, model_config):
         super(BartPhoPointer, self).__init__(config)
 
-        if model_config is not None:
-            self.pgen_board = SummaryWriter(log_dir=model_config.get("logging_dir", ""))
-            self.pgen_counter = 0
-        else:
-            self.pgen_board = SummaryWriter(log_dir=OUTPUT_PATH + "/logging/logging31_10/")
-            self.pgen_counter = 0
+        self.pgen_board = SummaryWriter(log_dir=model_config.training_logging_dir)
+        self.pgen_counter = 0
 
         self.p_gen_sigmoid = nn.Sigmoid()
 

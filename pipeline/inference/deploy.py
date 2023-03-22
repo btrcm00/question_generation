@@ -15,32 +15,39 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 
-def mbart_config():
+def api_config():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--folder_checkpoint", default=INFERENCE_PATH + "/checkpoint/bartpho_pointer_22_9/", type=str)
+    # parser.add_argument("--folder_checkpoint", default=OUTPUT_PATH + "/checkpoint/checkpoint_bart_16_3/", type=str)
+    parser.add_argument("--folder_checkpoint", default=OUTPUT_PATH + "/checkpoint/checkpoint_bart_20_3_all_data/",
+                        type=str)
     parser.add_argument('--input_max_length', default=512, type=int,
                         help='maximum context token number')
     parser.add_argument('--output_max_length', default=256, type=int,
                         help='maximum context token number')
     parser.add_argument('--model_device', default="cpu", type=str)
     parser.add_argument('--parallel_input_processing', action='store_true')
+    parser.add_argument('--sampling_return_entity', action='store_true')
     parser.add_argument('--inference_batch_size', default=4, type=int)
-    parser.add_argument("--training_logging_dir", default=f"{OUTPUT_PATH}/logging/logging_bart_7_3/", type=str,
-                                 help="Tensorboard Logging Folder")
-    return parser.parse_args()
+    parser.add_argument("--training_logging_dir", default=f"{OUTPUT_PATH}/logging/base", type=str,
+                        help="Tensorboard Logging Folder")
+    parser.add_argument("--api_port", default=35234, type=int)
+
+    return parser.parse_known_args()
 
 
-bart_config = mbart_config()
-config = PipelineConfig(
-    training_output_dir=bart_config.folder_checkpoint,
-    pipeline_input_max_length=bart_config.input_max_length,
-    pipeline_output_max_length=bart_config.output_max_length,
-    pipeline_device=bart_config.model_device,
-    sampling_parallel_input_processing=bart_config.parallel_input_processing,
-    sampling_inference_batch_size=bart_config.inference_batch_size,
-    training_logging_dir=bart_config.training_logging_dir
+config, _ = api_config()
+pipeline_config = PipelineConfig(
+    training_output_dir=config.folder_checkpoint,
+    pipeline_input_max_length=config.input_max_length,
+    pipeline_output_max_length=config.output_max_length,
+    pipeline_device=config.model_device,
+    sampling_parallel_input_processing=config.parallel_input_processing,
+    sampling_inference_batch_size=config.inference_batch_size,
+    training_logging_dir=config.training_logging_dir,
+    sampling_return_entity=config.sampling_return_entity
 )
-sampler = QuestionSampler(config)
+sampler = QuestionSampler(pipeline_config)
+
 
 @app.route('/question_gen/bart_predict', methods=['POST'])
 def bart_predict():
@@ -76,4 +83,4 @@ def create_app():
 
 
 if __name__ == '__main__':
-    app.run(host=Config.service_host, port=35234)
+    app.run(host=Config.service_host, port=config.api_port)

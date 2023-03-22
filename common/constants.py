@@ -13,8 +13,9 @@ INFERENCE_PATH = CURRENT_PATH + "/pipeline/inference/"
 EMB_CONFIG_PATH = DATA_PATH + "/emb_config.json"
 TONE_MAPPING_PATH = DATA_PATH + "/tone_mapping.json"
 SPECIAL_TOKENS_PATH = DATA_PATH + "/new_specials_tokens.json"
+SIMILAR_ENTITY_TAG = DATA_PATH + "/similar_entity_tag.json"
 STOP_WORD_PATH = DATA_PATH + "stop_words.txt"
-SAMPLING_FOLDER = DATA_PATH + "/sampling_dataset/"
+SAMPLING_FOLDER = DATA_PATH + "/sampling/sampling_dataset"
 TRAING_DATASET_FOLDER = DATA_PATH + "/training/"
 stop_words = []  # open(STOP_WORD_PATH, "r", encoding="utf8").readlines()
 STOP_WORDS_LIST = []  # [w[:-1] for w in stop_words]

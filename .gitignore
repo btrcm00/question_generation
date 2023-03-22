@@ -3,10 +3,21 @@ dataset/*
 runs/
 __pycache__/
 QuestionAnswering_Generation.egg-info/
+<<<<<<< HEAD
 inference/checkpoint/*
+=======
+*/inference/checkpoint/*
+>>>>>>> af1f993 (refactor all pipeline and add script files for sub modules)
 training_output/*
 *.csv
 *.ipynb
 *.json
 .env
+<<<<<<< HEAD
 backup/
+=======
+*.env
+backup/
+testing_script/
+logs
+>>>>>>> af1f993 (refactor all pipeline and add script files for sub modules)

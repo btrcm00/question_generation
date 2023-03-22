@@ -1,6 +1,3 @@
-import argparse
-
-from queue import Queue
 from tqdm import tqdm
 from transformers import AutoTokenizer
 from threading import Thread, Event
@@ -16,6 +13,7 @@ class DatasetConstructor(metaclass=SingletonMeta):
         #                          SPECIAL_TOKENS] + [e.name for e in QuestionType]
         # new_specials_lst = [f"<{tk.upper()}>" for tk in list(set(new_special_tokens))]
         self.config = constructor_config if constructor_config is not None else PipelineConfig()
+        self.logger = logging.getLogger(__name__)
         tokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path)
 
         self.model_utils = ModelUtils(input_max_length=self.config.pipeline_input_max_length,
@@ -26,22 +24,34 @@ class DatasetConstructor(metaclass=SingletonMeta):
         output_folder = f"{self.config.pipeline_dataset_folder}/processed"
         check_exist_folder(output_folder)
         self.output_folder = output_folder
+
         assert sum(self.config.constructor_ratio) == 1, "Sum of ratio must be 1"
         self.ratio_for_split = self.config.constructor_ratio
 
         input_data_folder = f"{self.config.pipeline_dataset_folder}/raw"
         assert os.path.isdir(input_data_folder)
         self.qa_dataset = self.load_qa_dataset(data_path=input_data_folder)
-        self.load_processed_data()
-                
+        self.processed_data = self.load_processed_data()
+        self.temp_data_file = self.get_temp_file()
+
+    def get_temp_file(self):
+        prefix_temp_filename = "all_examples_"
+        all_files = os.listdir(self.output_folder)
+        all_files = [f.replace(".pkl", "") for f in all_files if "all" in f]
+        all_files.sort(key=lambda f: int(f.replace(prefix_temp_filename, "")))
+        indice = int(all_files[-1].replace(prefix_temp_filename, "")) + 1 if all_files else 0
+
+        return f"{prefix_temp_filename}{indice}.pkl"
+
     def load_processed_data(self):
         file_lst = [os.path.join(self.output_folder, f) for f in os.listdir(self.output_folder) if
                     os.path.isfile(os.path.join(self.output_folder, f)) and ".pkl" in f]
         processed_data = []
         for f in file_lst:
             processed_data += [ele["id"] for ele in load_file(f)]
-
-        self.processed_data = processed_data
+        processed_data = list(set(processed_data))
+        self.logger.info(f"LOADED {len(processed_data)} processed examples")
+        return processed_data
 
     def load_qa_dataset(self, data_path, mode: str = None):
         """
@@ -67,25 +77,24 @@ class DatasetConstructor(metaclass=SingletonMeta):
         """
         if mode is None:
             mode = ""
-        
+
         file_lst = [os.path.join(data_path, f) for f in os.listdir(data_path) if
                     os.path.isfile(os.path.join(data_path, f)) and mode in f]
         dataset = []
         for f in file_lst:
-            dataset += json.load(open(f, "r", encoding="utf8"))["data"]
-        print(f"Loaded {len(dataset)} examples")
-        
-        
+            dataset += json.load(open(f, "r", encoding="utf8"))  # ["data"]
+        self.logger.info(f"Loaded {len(dataset)} examples")
+
         return dataset
 
     def process_data(self, bar, output: list, q: Queue, e: Event):
         while not e.is_set() or not q.empty():
             data = q.get()
             if "answer" not in data:
-                print(77777777777,data)
                 import sys
                 sys.exit()
-            if data["id"] not in self.processed_data and data["answer"]["text"] and data["answer"]["text"][0] in data[CONTEXT]:
+            if data["id"] not in self.processed_data and data["answer"]["text"] and data["answer"]["text"][0] in data[
+                CONTEXT]:
                 answer = " ".join(
                     [" ".join([e for e in ele]) for ele in Config.vncore_nlp.tokenize(data["answer"]["text"][0])])
                 answer = tone_normalization(answer)
@@ -93,7 +102,8 @@ class DatasetConstructor(metaclass=SingletonMeta):
                     answer = answer[:-1]
 
                 passage_ans_clue = data[CONTEXT]
-                ner_dict, processed_passage = self.model_utils.get_entity_from_passage(passage_ans_clue, is_segmented_list=False)
+                ner_dict, processed_passage = self.model_utils.get_entity_from_passage(passage_ans_clue,
+                                                                                       is_segmented_list=False)
                 ner_ans = "ANS"
                 ner_lst = []
                 for ent in ner_dict.keys():
@@ -127,19 +137,25 @@ class DatasetConstructor(metaclass=SingletonMeta):
                                 MODEL_ENTITY_DICT_INPUT: ner_dict
                             })
                     if len(output) % 500 == 0 and len(output) > 0:
-                        save_file(output, self.output_folder + f"/all_examples.pkl")
+                        save_file(output, f"{self.output_folder}/{self.temp_data_file}")
 
             bar.update(1)
 
     def save_dataset(self, dataset: list, shuffle: bool = True):
+        _lst = []
+        clean_data = dataset
+        # for data in tqdm(dataset):
+        #     if data["id"] not in _lst:
+        #         clean_data.append(data)
+        #         _lst.append(data["id"])
         if shuffle:
-            random.shuffle(dataset)
+            random.shuffle(clean_data)
 
-        l = len(dataset)
+        l = len(clean_data)
         ratio = [sum(self.ratio_for_split[:i]) for i in range(1, len(self.ratio_for_split))]
-        train_data = dataset[:int(l * ratio[0])]
-        dev_data = dataset[int(l * ratio[0]):int(l * ratio[1])]
-        test_data = dataset[int(l * ratio[1]):]
+        train_data = clean_data[:int(l * ratio[0])]
+        dev_data = clean_data[int(l * ratio[0]):int(l * ratio[1])]
+        test_data = clean_data[int(l * ratio[1]):]
 
         save_file(train_data, self.output_folder + "/train_examples.pkl")
         save_file(dev_data, self.output_folder + "/dev_examples.pkl")
@@ -147,7 +163,7 @@ class DatasetConstructor(metaclass=SingletonMeta):
 
     def run(self):
         output = []
-        input_queue = Queue(maxsize=1000)
+        input_queue = Queue(maxsize=10000)
         bar = tqdm(total=len(self.qa_dataset), initial=0, leave=True)
 
         event = Event()
@@ -167,6 +183,9 @@ class DatasetConstructor(metaclass=SingletonMeta):
         json.dump({"new_specials": self.model_utils.special_tokens},
                   open(f"{self.config.pipeline_dataset_folder}/new_special_tokens.json", "w", encoding="utf8"),
                   indent=4, ensure_ascii=False)
+        for f in os.listdir(self.output_folder):
+            if "all" in f:
+                output += load_file(f"{self.output_folder}/{f}")
         self.save_dataset(output)
 
 

@@ -8,15 +8,12 @@ from transformers.modeling_outputs import Seq2SeqLMOutput, BaseModelOutput
 from transformers.models.mbart.modeling_mbart import shift_tokens_right
 from transformers.utils import logging
 
-from common.constants import OUTPUT_PATH
-
 logger = logging.get_logger(__name__)
 
 
 class BartPhoPointer(MBartForConditionalGeneration):
     def __init__(self, config: MBartConfig, model_config):
         super(BartPhoPointer, self).__init__(config)
-
         self.pgen_board = SummaryWriter(log_dir=model_config.training_logging_dir)
         self.pgen_counter = 0
 

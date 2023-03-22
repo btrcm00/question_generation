@@ -3,10 +3,13 @@ dataset/*
 runs/
 __pycache__/
 QuestionAnswering_Generation.egg-info/
-inference/checkpoint/*
+*/inference/checkpoint/*
 training_output/*
 *.csv
 *.ipynb
 *.json
 .env
+*.env
 backup/
+testing_script/
+logs

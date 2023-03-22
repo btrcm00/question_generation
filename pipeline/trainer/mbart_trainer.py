@@ -2,6 +2,7 @@ import argparse
 import json
 import numpy as np
 import torch
+import logging
 
 from datasets import load_metric
 from transformers import SchedulerType, AutoTokenizer
@@ -11,12 +12,12 @@ from transformers.training_args_seq2seq import Seq2SeqTrainingArguments
 from common.common_keys import *
 from common.config import QuestionType, PipelineConfig
 from common.constants import *
-from dataset_constructor.dataloader import FQG_dataset
-from trainer.model.bartpho import BartPhoPointer
-from backup.trainer.seq2seq_trainer import QGTrainer
+from pipeline.dataset_constructor.dataloader import FQG_dataset
+from pipeline.trainer.model.bartpho import BartPhoPointer
+from pipeline.trainer.seq2seq_trainer import QGTrainer
 
 os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
 
@@ -57,7 +58,8 @@ def model_config():
     training_parser.add_argument('--input_max_length', default=512, type=int,
                                  help='maximum context token number')
 
-    training_parser.add_argument('--use_pointer', action='store_true', help='whether or not using pointer generator in training model')
+    training_parser.add_argument('--use_pointer', action='store_true',
+                                 help='whether or not using pointer generator in training model')
 
     return training_parser.parse_args()
 
@@ -67,31 +69,22 @@ class ModelTrainer:
         self.config = config if config is not None else PipelineConfig()
         self.metric = load_metric("sacrebleu")
         self.sent_limit = self.config.pipeline_input_max_length
-        self.tokenizer: AutoTokenizer
-        if not self.config.training_restore_checkpoint:
-            # add new special tokens
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path)
-            new_special_tokens = json.load(open(SPECIAL_TOKENS_PATH))[
-                                     SPECIAL_TOKENS] + [e.name for e in QuestionType]
-            special_tokens_dict = {
-                "additional_special_tokens": [f"<{id_.upper()}>" for id_ in list(set(new_special_tokens))]}
-            self.tokenizer.add_special_tokens(special_tokens_dict)
-            # ==========================================
 
-            self.model = BartPhoPointer.from_pretrained(
-                self.config.pipeline_pretrained_path,
-                model_config=self.config
-            )
-            # resize embeddings of encoder and decoder
-            self.model.resize_token_embeddings(len(self.tokenizer.get_vocab()))
-            # ==========================================
-            # model = BartPhoPointer.from_pretrained(config.training_restore_folder,
-            #                                        model_config=training_config.__dict__)
-        else:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.training_restore_folder)
-            self.model = BartPhoPointer.from_pretrained(self.config.training_restore_folder,
-                                                        model_config=self.config.__dict__)
-        
+        self.tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path)
+        new_special_tokens = json.load(open(SPECIAL_TOKENS_PATH))[
+                                 SPECIAL_TOKENS] + [e.name for e in QuestionType]
+        special_tokens_dict = {
+            "additional_special_tokens": [f"<{id_.upper()}>" for id_ in list(set(new_special_tokens))]}
+        self.tokenizer.add_special_tokens(special_tokens_dict)
+        # ==========================================
+
+        self.model = BartPhoPointer.from_pretrained(
+            self.config.pipeline_pretrained_path,
+            model_config=self.config
+        )
+        # resize embeddings of encoder and decoder
+        self.model.resize_token_embeddings(len(self.tokenizer.get_vocab()))
+
         self.model_device = self.config.pipeline_device
         self.model.to(self.config.pipeline_device)
         self.train_dataset, self.valid_dataset, self.test_dataset = FQG_dataset.get_dataset(
@@ -99,6 +92,7 @@ class ModelTrainer:
             tokenizer=self.tokenizer,
             added_new_special_tokens=True
         )
+        self.logger = logging.getLogger(__name__)
 
     def collate_(self, data):
         batch = {}
@@ -130,12 +124,12 @@ class ModelTrainer:
         labels = np.where(labels != -100, labels, self.tokenizer.pad_token_id)
         decoded_labels = self.tokenizer.batch_decode(labels, skip_special_tokens=True)
 
-        print("_______________________________________")
-        print("_______________________________________")
-        print("PRED : ", decoded_predictions)
-        print("LABEL: ", decoded_labels)
-        print("_______________________________________")
-        print("_______________________________________")
+        self.logger.info("_______________________________________")
+        self.logger.info("_______________________________________")
+        self.logger.info("PRED : ", decoded_predictions)
+        self.logger.info("LABEL: ", decoded_labels)
+        self.logger.info("_______________________________________")
+        self.logger.info("_______________________________________")
 
         result = self.metric.compute(predictions=decoded_predictions, references=[[ele] for ele in decoded_labels])
         result = {"bleu": result["score"]}
@@ -159,7 +153,7 @@ class ModelTrainer:
             predict_with_generate=True,
             gradient_accumulation_steps=self.config.training_gradient_accumulation_steps,
             eval_steps=self.config.training_eval_steps,
-            fp16=self.model_device=="cuda",
+            fp16=self.model_device == "cuda",
             push_to_hub=False,
             # dataloader_pin_memory=True,
             dataloader_num_workers=2,
@@ -188,35 +182,35 @@ class ModelTrainer:
         )
 
         _trainer.train(resume_from_checkpoint=self.config.training_restore_checkpoint)
-        # print(trainer.evaluate(valid_dataset))
+        # self.logger.info(trainer.evaluate(valid_dataset))
 
 
 if __name__ == "__main__":
-#     training_config = model_config()
+    #     training_config = model_config()
 
-#     config = PipelineConfig(
-#         training_output_dir=training_config.output_dir,
-#         training_use_pointer=training_config.use_pointer,
-#         pipeline_input_max_length=training_config.input_max_length,
-#         pipeline_output_max_length=training_config.generation_max_length,
-#         training_warm_up_ratio=training_config.warm_up_ratio,
-#         training_metrics=training_config.metric_for_best_model,
-#         training_generation_num_beams=training_config.generation_num_beams,
-#         pipeline_pretrained_path=training_config.pretrained_path,
-#         pipeline_dataset_folder=training_config.dataset_folder,
-#         training_restore_folder=training_config.restore_folder,
-#         training_restore_checkpoint=training_config.restore_checkpoint,
-#         training_num_epochs=training_config.num_train_epochs,
-#         pipeline_device=training_config.device,
-#         training_save_steps=training_config.save_steps,
-#         training_logging_steps=training_config.logging_steps,
-#         training_eval_steps=training_config.eval_steps,
-#         training_gradient_accumulation_steps=training_config.gradient_accumulation_steps,
-#         training_learning_rate=training_config.lr,
-#         training_save_total_limit=training_config.save_total_limit,
-#         training_weight_decay=training_config.weight_decay,
-#         training_batch_size=training_config.batch_size,
-#         training_logging_dir=training_config.logging_dir,
-#     )
+    #     config = PipelineConfig(
+    #         training_output_dir=training_config.output_dir,
+    #         training_use_pointer=training_config.use_pointer,
+    #         pipeline_input_max_length=training_config.input_max_length,
+    #         pipeline_output_max_length=training_config.generation_max_length,
+    #         training_warm_up_ratio=training_config.warm_up_ratio,
+    #         training_metrics=training_config.metric_for_best_model,
+    #         training_generation_num_beams=training_config.generation_num_beams,
+    #         pipeline_pretrained_path=training_config.pretrained_path,
+    #         pipeline_dataset_folder=training_config.dataset_folder,
+    #         training_restore_folder=training_config.restore_folder,
+    #         training_restore_checkpoint=training_config.restore_checkpoint,
+    #         training_num_epochs=training_config.num_train_epochs,
+    #         pipeline_device=training_config.device,
+    #         training_save_steps=training_config.save_steps,
+    #         training_logging_steps=training_config.logging_steps,
+    #         training_eval_steps=training_config.eval_steps,
+    #         training_gradient_accumulation_steps=training_config.gradient_accumulation_steps,
+    #         training_learning_rate=training_config.lr,
+    #         training_save_total_limit=training_config.save_total_limit,
+    #         training_weight_decay=training_config.weight_decay,
+    #         training_batch_size=training_config.batch_size,
+    #         training_logging_dir=training_config.logging_dir,
+    #     )
     trainer = ModelTrainer()
     trainer.run()

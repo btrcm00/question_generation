@@ -2,6 +2,7 @@ import torch
 import random
 import json
 import os
+import logging
 
 import regex as re
 from torch.utils.data import Dataset
@@ -25,13 +26,14 @@ def get_ner_in_tensor(input_ids, ner_list, tokenizer):
 
 
 class FQG_dataset(Dataset):
-    def __init__(self, config: PipelineConfig=None, mode='train', tokenizer=None, added_new_special_tokens=False,
+    def __init__(self, config: PipelineConfig = None, mode='train', tokenizer=None, added_new_special_tokens=False,
                  model_type="marian"):
         super().__init__()
         assert mode in ["train", "dev", "test"], "train should be 'train', 'dev' or 'test'"
 
         self.mode = mode
         self.config = config if config is not None else PipelineConfig()
+        self.logger = logging.getLogger(self.__class__.__name__)
 
         if not tokenizer:
             assert self.config.pipeline_pretrained_path is not None, "You have to specify tokenizer path if tokenizer is None"
@@ -59,6 +61,8 @@ class FQG_dataset(Dataset):
         in_text = re.sub(r"( \.)+", " .", in_text)
         # ques_type_token = "<" + data_item[MODEL_QUESTION_TYPE_INPUT].upper().replace(" ", "_") + ">"
         # inputs = ques_type_token + " " + in_text
+        if data_item[MODEL_QUESTION_TYPE_INPUT].upper() == "OTHER" or random.randint(0, 1000) < 200:
+            in_text = in_text.replace("<" + data_item[MODEL_QUESTION_TYPE_INPUT].upper() + "> ", "")
 
         passage_tokenized = self.tokenizer(in_text, padding="max_length",
                                            max_length=self.config.pipeline_input_max_length, truncation=True)
@@ -80,27 +84,28 @@ class FQG_dataset(Dataset):
             LABEL: labels
         }
 
-    @staticmethod
-    def load_data(path, mode):
+    def load_data(self, path: str, mode: str):
         data = []
         for file in os.listdir(path):
             if mode in file:  # and file.endswith(".pkl"):
                 data += load_file(f"{path}/{file}")
-                data = [ele for ele in data if ele[MODEL_QUESTION_TYPE_INPUT].upper() not in ["OTHER", "BOOLEAN"]]
+                data = [ele for ele in data if ele[MODEL_QUESTION_TYPE_INPUT].upper() not in ["BOOLEAN", "OTHER"] or (
+                        ele[MODEL_QUESTION_TYPE_INPUT].upper() == "OTHER" and random.randint(0, 1000) < 100)]
         random.shuffle(data)
-        print(f"Loaded {len(data)} examples in {mode} dataset ...")
-        if mode == "dev" or mode == "train":
-            return data[:20]
+        self.logger.info(f"Loaded {len(data)} examples in {mode} dataset ...")
+        if mode == "dev":
+            return data[:2000]
         return data
 
     @staticmethod
-    def get_dataset(config: PipelineConfig = None, mode=None, tokenizer=None, added_new_special_tokens=False,
-                    model_type="marian"):
+    def get_dataset(config: PipelineConfig = None, mode: str = None, tokenizer=None,
+                    added_new_special_tokens: bool = False,
+                    model_type: str = None):
         tok = None
         if tokenizer:
             tok = tokenizer
 
-        if mode:
+        if mode is not None:
             return FQG_dataset(config=config, mode=mode, tokenizer=tok)
         else:
             train_dataset = FQG_dataset(config=config, mode="train", tokenizer=tok,

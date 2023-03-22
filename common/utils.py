@@ -5,6 +5,7 @@ import copy
 import numpy as np
 import requests
 import string
+import logging
 
 import regex as re
 from googletrans import Translator
@@ -17,6 +18,7 @@ from common.config import *
 from common.constants import *
 
 translator = Translator()
+logger = logging.getLogger(__name__)
 
 
 def tone_normalization(passage):
@@ -44,7 +46,9 @@ def pre_process(func):
         passage = tone_normalization(passage)
         # passage = passage.replace("_", " ").replace("\"", "'")
         passage = re.sub(r"\s\"\s", r" ", passage)
-        passage = re.sub(r"(\w)([\.,:;])(\w)", r"\1\2 \3", passage)
+        passage = re.sub(r"([^\d\W])([\.,:;])([^\d\W])", r"\1\2 \3", passage)
+        passage = re.sub(r"([^\d\W])([\.,:;])(\d)", r"\1\2 \3", passage)
+        passage = re.sub(r"(\d)([\.,:;])([^\d\W])", r"\1\2 \3", passage)
         # passage = re.sub(r"([\.,;]) ([A-Z]|[{}])".format(VIETNAMESE_RE), r". \2",
         #                  passage)
         kwargs["passage"] = passage
@@ -103,7 +107,7 @@ def _pickle_dump_large_file(obj, filepath):
         for idx in range(0, n_bytes, max_bytes):
             f_out.write(bytes_out[idx:idx + max_bytes])
 
-    print(f"Save {filepath}-{len(obj)} done!")
+    logger.info(f"Save {filepath}-{len(obj)} done!")
 
 
 def _pickle_load_large_file(filepath):
@@ -133,7 +137,7 @@ def make_request(api_url, data, method):
             return output
         except:
             count += 1
-    return {}
+    return requests.request(method=method, url=api_url, data=payload, headers=headers).json()
 
 
 def check_exist_file(file_path):
@@ -169,7 +173,7 @@ def timer(func):
     def _timer(*args, **kwargs):
         start_time = time.time()
         result = func(*args, **kwargs)
-        print(f"`{func.__qualname__}` PROCESSING TIME:", time.time() - start_time)
+        logger.info(f"`{func.__qualname__}` PROCESSING TIME: {time.time() - start_time}")
         return result
 
     return _timer
@@ -182,10 +186,24 @@ class ModelUtils(metaclass=SingletonMeta):
             tokenizer=None
     ):
         self.input_max_length = input_max_length
+        ans_patterns = json.load(open(SPECIAL_TOKENS_PATH))[SPECIAL_TOKENS]
+        ans_patterns = list(map(lambda x: x.upper(), ans_patterns))
+        self.ans_patterns = re.compile("<(" + "|".join(ans_patterns) + ")>")
+
         special_tokens = json.load(open(SPECIAL_TOKENS_PATH))[SPECIAL_TOKENS] + [e.name for e in QuestionType]
         self.special_tokens = list(map(lambda x: x.upper(), special_tokens))
         self.special_pattern = re.compile("<(" + "|".join(special_tokens) + ")>")
         self.tokenizer = tokenizer
+
+        similar_entity_tag = json.load(open(SIMILAR_ENTITY_TAG, "r", encoding="utf8"))["similar"]
+        self.similar_entity_tag = self.process_similar_tag(similar_entity_tag)
+
+    def process_similar_tag(self, tag_lst):
+        return {
+            tag: similar_tag_lst
+            for similar_tag_lst in tag_lst
+            for tag in similar_tag_lst
+        }
 
     @post_process
     def truncate_passage(self, passage: str):
@@ -209,12 +227,32 @@ class ModelUtils(metaclass=SingletonMeta):
         out_passage = copy.deepcopy(passage_splits)
         while len(self.tokenizer(" ".join([e for ele1 in out_passage for e in ele1.split()]))[
                       INPUT_IDS]) > self.input_max_length:
-            retain_idx = [idx for idx, ele in enumerate(out_passage) if not self.special_pattern.search(ele)]
-            if not retain_idx:
-                print(out_passage)
-                print(len([e for ele1 in out_passage for e in ele1.split()]))
+            # retain_idx = [idx for idx, ele in enumerate(out_passage) if not self.special_pattern.search(ele)]
+            # target_idx = [idx for idx, ele in enumerate(out_passage) if self.special_pattern.search(ele)]
+            retain_idx, target_idx = [], []
+            for idx, ele in enumerate(out_passage):
+                if not self.ans_patterns.search(ele):
+                    retain_idx.append(idx)
+                else:
+                    target_idx.append(idx)
+
+            if not retain_idx or not target_idx:
+                logger.info(out_passage)
+                logger.info(len([e for ele1 in out_passage for e in ele1.split()]))
                 break
-            rm_index = random.choice(retain_idx)
+            target_idx = target_idx[-1]
+            chosen_idx = []
+            if len(retain_idx) <= 2:
+                chosen_idx = retain_idx
+            if retain_idx[-1] < target_idx:
+                chosen_idx = retain_idx[:2]
+            elif retain_idx[0] > target_idx:
+                chosen_idx = retain_idx[-2:]
+            else:
+                chosen_idx = [retain_idx[0], retain_idx[-1]]
+            if not chosen_idx:
+                break
+            rm_index = random.choice(chosen_idx)
             out_passage.pop(rm_index)
 
         return " ".join(out_passage)
@@ -240,7 +278,8 @@ class ModelUtils(metaclass=SingletonMeta):
         passage_ans_clue = passage[:ans_lst[1]] + answer_chunk + passage[ans_lst[2]:]
         # split_passage = passage.split(" . ")
         # passage_ans_clue = " ".join( f"{ele} ." for ele in split_passage)
-        passage_ans_clue = self.truncate_passage(f"<{ques_type}> {passage_ans_clue}")
+        p = f"<{ques_type}> {passage_ans_clue}" if ques_type else passage_ans_clue
+        passage_ans_clue = self.truncate_passage(passage=p)
         return passage_ans_clue
 
     def prepare_model_input_threading(self, bar, output: list, q: Queue, e: Event):
@@ -333,7 +372,6 @@ class ModelUtils(metaclass=SingletonMeta):
         # except:
         #     return False
         # answer_truth = answer.replace("_", " ").split()
-        # print(answer_pred, answer_truth)
         if not answer_truth:
             return False
         if sum([1 if e in answer_pred else 0 for e in answer_truth]) / len(answer_truth) < score:
@@ -367,6 +405,9 @@ class ModelUtils(metaclass=SingletonMeta):
             return True
         return False
 
+    def is_similar_tag(self, src_tag: str, dst_tag: str):
+        return dst_tag in self.similar_entity_tag.get(src_tag, [src_tag])
+
     def concat_adjacent_entities(self, ner_dict: dict, passage: str):
         output_ner_dict = {}
         ner_list = [(ner_text, ner_lst) for ner_text, ner_lst in ner_dict.items()]
@@ -377,8 +418,8 @@ class ModelUtils(metaclass=SingletonMeta):
             start_pos = ner_list[idx][1][1]
             end_pos = ner_list[idx][1][2]
             tag = ner_list[idx][1][0]
-            if temp_lst and tag == temp_lst[0] and (
-                    temp_lst[2] + 1 == start_pos or self._is_linkable_char(passage[temp_lst[2]:start_pos])):
+            if temp_lst and self.is_similar_tag(src_tag=tag, dst_tag=temp_lst[0]) \
+                    and (temp_lst[2] + 1 == start_pos or self._is_linkable_char(passage[temp_lst[2]:start_pos])):
                 temp_lst = [tag, temp_lst[1], end_pos]
             elif not temp_lst:
                 temp_lst = ner_list[idx][1]
@@ -427,7 +468,7 @@ class ModelUtils(metaclass=SingletonMeta):
         count = 0
         for sub_passage in processed_passage:
             if not isinstance(sub_passage, str):
-                print(processed_passage)
+                logger.info(processed_passage)
                 import sys
                 sys.exit()
             count += 1
@@ -484,7 +525,11 @@ class ModelUtils(metaclass=SingletonMeta):
         sents = []
         chunk_list = []
 
-        child_lst = sorted(node["children"], key=lambda t: t["id"])
+        try:
+            child_lst = sorted(node["children"], key=lambda t: t["id"])
+        except:
+            logger.info(888888888888888, node)
+            child_lst = sorted(node["children"], key=lambda t: t["id"])
 
         for ele in child_lst:
             child_list, child_chunk = self._navigate(ele, tag_lst)
@@ -527,9 +572,9 @@ class ModelUtils(metaclass=SingletonMeta):
         if parsing_tree == "Server error":
             return "ERROR"
 
-        return parsing_tree["ROOT"]
+        return parsing_tree  # parsing_tree.get("ROOT", parsing_tree) if isinstance(parsing_tree, dict) else parsing_tree
 
-    def get_chunk(self, passage, tag_lst: list = None, is_segmented: bool = False):
+    def get_chunk_old(self, passage, tag_lst: list = None, is_segmented: bool = False):
         """return chunks of sentence
 
         Args:
@@ -556,11 +601,15 @@ class ModelUtils(metaclass=SingletonMeta):
         def get_sentence_chunk(sent, start_idx: int):
             try:
                 tree = self.parse_sentence(passage=sent)
-            except:
+            except Exception as e:
+                logger.info("EROR!!!!!!!!!!!!!", e)
                 return []
 
             if not isinstance(tree, dict):
-                return []
+                tree = {
+                    "children": tree
+                }
+                # return []
             chunk_list = []
             _, orig_chunk_list = self._navigate(tree, tag_lst=tag_lst)
             for ele in orig_chunk_list:
@@ -574,7 +623,7 @@ class ModelUtils(metaclass=SingletonMeta):
                     chunk_list.append((None, ele[-1], chunk, int(start_pos + start_idx),
                                        int(end_pos + start_idx)))
                 except Exception as e:
-                    print('Exception in Chunking: ', e)
+                    logger.info('Exception in Chunking: ', e)
                     continue
 
             return chunk_list
@@ -582,7 +631,66 @@ class ModelUtils(metaclass=SingletonMeta):
         return [e for sent, start_idx in zip(sentence_list, index_sentence_in_passage) for e in
                 get_sentence_chunk(sent, start_idx)], " ".join(sentence_list).split()
 
+    def get_chunk(self, passage, tag_lst: list = None, is_segmented: bool = False):
+        """return chunks of sentence
+
+        Args:
+            passage (): __
+            tag_lst (list)
+            is_segmented (bool)
+
+        Returns:
+            list: list of chunks in sentence. [NER_tag, POS_tag, chunk, start_position, end_position]
+        """
+        if not tag_lst:
+            tag_lst = ["AP", "PP-MNR"]
+        if is_segmented:
+            sentence_list = [" ".join(ele) for ele in passage]
+        else:
+            if isinstance(passage, list):
+                passage = " ".join(passage).replace("_", " ")
+            sentence_list = [" ".join(ele) for ele in Config.vncore_nlp.tokenize(passage)]
+            # sentence_list = Config.vncore_nlp.tokenize(passage)
+
+        index_sentence_in_passage = np.concatenate(
+            [[0], np.cumsum([len(ele.split()) for ele in sentence_list])])
+        # _passage = " ".join([" ".join(ele).replace("_", " ") for ele in sentence_list])
+        _passage = " ".join(sentence_list).replace("_", " ")
+        # _passage = passage
+
+        try:
+            tree = self.parse_sentence(passage=_passage)
+        except Exception as e:
+            logger.info("EROR!!!!!!!!!!!!!", e)
+            return []
+
+        def process_sub_tree(sub_tree, start_idx):
+            chunk_list = []
+            _, orig_chunk_list = self._navigate(sub_tree, tag_lst=tag_lst)
+            for ele in orig_chunk_list:
+                try:
+                    chunk = [re.sub(r"___\d+", "", e) for e in ele[:-1]]
+
+                    start_pos = int(ele[0].split("___")[-1]) - 1
+                    end_pos = int(ele[-2].split("___")[-1]) - 1
+                    chunk_list.append((None, ele[-1], chunk, int(start_pos + start_idx),
+                                       int(end_pos + start_idx)))
+                except Exception as e:
+                    logger.info('Exception in Chunking: ', e)
+                    continue
+
+            return chunk_list
+
+        output = []
+        pre_idx = 0
+        for idx, sub_tree in enumerate(tree):
+            output += process_sub_tree(sub_tree=sub_tree["ROOT"], start_idx=index_sentence_in_passage[idx])
+
+        return output
+
 
 if __name__ == "__main__":
-    pass
-    # print(nltk_tokenizer.tokenize("₫270.000"))
+    utils = ModelUtils(input_max_length=512, tokenizer=None)
+    logger.info(utils.get_chunk(
+        "Một quả bóng quần vợt hay bóng tennis là một quả bóng có độ nẩy khi va đập , thiết kế cho môn thể thao quần vợt , nhưng cũng được dùng cho một số môn thể thao khác như squash tennis hay lotball . Những quả bóng quần vợt đầu tiên trong lịch sử được làm bằng da nhồi lông hay len . Từ thế kỷ 18 trở đi , một dải len rộng ¾ inch được quấn chặt quanh một nhân , rồi được buộc xung quanh bằng các sợi dây và bọc bên ngoài bằng vải trắng . Loại bóng này , được cải tiến với lõi gỗ bấc , vẫn được dùng trong môn real tennis ngày nay . Những năm 1870 , luật quần vợt quy định dùng cao su làm bóng , và các quả bóng được xếp trong ống khi vận chuyển , thường mỗi ống chứa bốn quả . Một quả bóng quần vợt hiện đại thông thường bao giờ cũng gồm hai phần , phần ruột và vỏ . Phần ruột được làm từ cao su rỗng ( lõi ) và phần vỏ phủ ra bên ngoài là chất liệu len ( nỉ ) . Hiện nay , bóng tennis có hai màu chính được phép sử dụng ở các giải đấu là trắng và vàng xanh . Bóng tennis có đường kính từ 2,5 inch ( 6,25 cm ) đến 2,63 inch ( 6,57 cm ) và có trọng lượng trong khoảng từ 56 gam đến 59,4 gam . Theo những quy định trong luật tennis , khi được thả từ độ cao 100 inch ( 254 cm ) xuống nền xi măng , bóng phải có độ nảy từ 53 đến 58 inch ( 135 đến 147 cm ) .",
+        tag_lst=["QP"]))

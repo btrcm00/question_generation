@@ -1,6 +1,8 @@
 import math
 import regex as re
 import torch
+import time
+import logging
 
 from transformers import AutoTokenizer
 from tqdm import tqdm
@@ -14,7 +16,8 @@ from pipeline.trainer.model.bartpho import BartPhoPointer
 
 class QuestionSampler:
     def __init__(self, config: PipelineConfig):
-
+        self.config = config
+        self.logger = logging.getLogger(self.__class__.__name__)
         self.device = config.pipeline_device
         self.return_entity = config.sampling_return_entity
         self.need_verify = config.sampling_verify
@@ -22,15 +25,16 @@ class QuestionSampler:
         self.output_max_length = config.pipeline_output_max_length
         self.parallel_input_processing = config.sampling_parallel_input_processing
         self.inference_batch_size = config.sampling_inference_batch_size
-        self.best_checkpoint_path = self.get_best_checkpoint(config.training_output_dir)
+        self.best_checkpoint_path = self.get_best_checkpoint(config.training_output_dir,
+                                                             checkpoint_type=self.config.pipeline_checkpoint_type)
         if not self.best_checkpoint_path:
-            raise "NOT FIND MODEL WITH INPUT PATH"
+            self.logger.error("NOT FIND MODEL WITH INPUT PATH")
+            # raise "NOT FIND MODEL WITH INPUT PATH"
         self.model, self.tokenizer = self.load_checkpoint(model_type=BartPhoPointer,
                                                           pretrained_path=self.best_checkpoint_path)
         self.model_utils = ModelUtils(input_max_length=config.pipeline_input_max_length, tokenizer=self.tokenizer)
 
-    @staticmethod
-    def get_best_checkpoint(folder_checkpoint: str = None):
+    def get_best_checkpoint(self, folder_checkpoint: str = None, checkpoint_type: str = "best"):
         """get checkpoint with highest BLEU score in `folder_checkpoint`
 
         Args:
@@ -39,6 +43,10 @@ class QuestionSampler:
         Returns:
             str: path of best checkpoint
         """
+        if checkpoint_type not in ["best", "last"]:
+            self.logger.error(f'`checkpoint_type` must be in ["best", "last"], not {checkpoint_type}')
+            # raise ValueError(f'`checkpoint_type` must be in ["best", "last"], not {checkpoint_type}')
+
         _re_checkpoint = re.compile(r"^checkpoint\-(\d+)$")
         if _re_checkpoint.search(folder_checkpoint.split("/")[-1]):
             return folder_checkpoint
@@ -49,6 +57,8 @@ class QuestionSampler:
             if len(checkpoints) == 0:
                 return folder_checkpoint
             last_checkpoint = max(checkpoints, key=lambda x: int(x.split("-")[-1]))
+            if checkpoint_type == "last":
+                return os.path.join(folder_checkpoint, last_checkpoint)
             state_of_last_checkpoint = os.path.join(folder_checkpoint, last_checkpoint) + "/trainer_state.json"
             if not os.path.isfile(state_of_last_checkpoint):
                 checkpoints.remove(last_checkpoint)
@@ -60,9 +70,9 @@ class QuestionSampler:
 
     @timer
     def load_checkpoint(self, model_type, pretrained_path: str):
-        print(f"LOADING CHECKPOINT AT {pretrained_path} ...")
+        self.logger.info(f"LOADING CHECKPOINT AT {pretrained_path} ...")
         if model_type == BartPhoPointer:
-            qg_model = model_type.from_pretrained(pretrained_path, model_config={"use_pointer": True})
+            qg_model = model_type.from_pretrained(pretrained_path, model_config=self.config)
         else:
             qg_model = model_type.from_pretrained(pretrained_path, training_config={"use_pointer": True})
 
@@ -99,10 +109,11 @@ class QuestionSampler:
             _type_: _description_
         """
         if num_return_sequences > num_beams:
-            raise ValueError("`num_return_sequences` has to be smaller or equal to `num_beams`.")
+            self.logger.error("`num_return_sequences` has to be smaller or equal to `num_beams`.")
+            # raise ValueError("`num_return_sequences` has to be smaller or equal to `num_beams`.")
         output = []
         num_iters = math.ceil(len(processed_passages) / self.inference_batch_size)
-        for i in tqdm(range(num_iters)):
+        for i in range(num_iters):
             passage_tokenized = self.tokenizer(
                 processed_passages[i * self.inference_batch_size:(i + 1) * self.inference_batch_size],
                 padding="max_length",
@@ -126,21 +137,22 @@ class QuestionSampler:
 
         return output
 
-    def pre_process_input(self, passage_ans_clue: str, question_type: str):
-        types = question_type.upper().replace(" ", "_")
+    def pre_process_input(self, passage_ans_clue: str, question_type: str = None):
+        types = question_type.upper().replace(" ", "_") if question_type else None
         _passage = passage_ans_clue
-        if ModelInputTag.clue not in _passage:
-            annotated_passage = [" ".join(ele).replace("< ", "<").replace(" >", ">").replace("/ ", "/") \
-                                 for ele in Config.vncore_nlp.tokenize(_passage.replace("_", " "))]
+        # if ModelInputTag.clue not in _passage:
+        #     annotated_passage = [" ".join(ele).replace("< ", "<").replace(" >", ">").replace("/ ", "/") \
+        #                          for ele in Config.vncore_nlp.tokenize(_passage.replace("_", " "))]
 
-            _passage = " ".join(
-                f"{ModelInputTag.clue} {ele} {ModelInputTag.close_clue}".replace(f". {ModelInputTag.close_clue}",
-                                                                                 f"{ModelInputTag.close_clue} .") \
-                    if self.model_utils.special_pattern.search(ele) else ele for ele in annotated_passage)
-        else:
-            _passage = " ".join([" ".join(ele).replace("< ", "<").replace(" >", ">").replace("/ ", "/") \
-                                 for ele in Config.vncore_nlp.tokenize(_passage.replace("_", " "))])
-        processed_passage = self.model_utils.truncate_passage(passage=f"<{types}> {_passage}")
+        #     _passage = " ".join(
+        #         f"{ModelInputTag.clue} {ele} {ModelInputTag.close_clue}".replace(f". {ModelInputTag.close_clue}",
+        #                                                                          f"{ModelInputTag.close_clue} .") \
+        #             if self.model_utils.special_pattern.search(ele) else ele for ele in annotated_passage)
+        # else:
+        _passage = " ".join([" ".join(ele).replace("< ", "<").replace(" >", ">").replace("/ ", "/") \
+                             for ele in Config.vncore_nlp.tokenize(_passage.replace("_", " "))])
+        passage = f"<{types}> {_passage}" if types is not None else _passage
+        processed_passage = self.model_utils.truncate_passage(passage=passage)
         return processed_passage
 
     @timer
@@ -205,13 +217,15 @@ class QuestionSampler:
         for lst in ques_type_mapping.values():
             all_tag_lst += lst
 
-        chunk_of_answer_lst, pos_passage = self.model_utils.get_chunk(tokenized_passage, tag_lst=all_tag_lst,
-                                                                      is_segmented=is_segmented)
+        chunk_of_answer_lst = self.model_utils.get_chunk(tokenized_passage, tag_lst=all_tag_lst,
+                                                         is_segmented=is_segmented)
+        pos_passage = " ".join(" ".join(ele) for ele in tokenized_passage).split()
         for _type, tag_lst in ques_type_mapping.items():
             ques_type = _type.upper().replace(" ", "_")
             # chunk_of_answer, pos_passage = self.model_utils.get_chunk(tokenized_passage, tag_lst=tag_lst,
             #                                                           is_segmented=is_segmented)
-            chunk_of_answer = [chunk for chunk in chunk_of_answer_lst if chunk[1].upper() in tag_lst]
+            chunk_of_answer = [chunk for chunk in chunk_of_answer_lst if
+                               any(chunk[1].upper().startswith(t) for t in tag_lst)]
             for ans in chunk_of_answer:
                 answer = " ".join(ans[2])
                 answer_start_idx = len(" ".join(pos_passage[:ans[-2]]))
@@ -260,10 +274,10 @@ class QuestionSampler:
             num_beams (int, optional): using in beam search. Defaults to 1.
             _id (str):
         """
-        print("START SAMPLING ...")
+        self.logger.info("START SAMPLING ...")
         tokenized_passage = self.model_utils.tokenize_passage(passage=passage, depth=0)
-        if len(tokenized_passage) > 5000:
-            return []
+        # if len(tokenized_passage) > 10000:
+        #     return []
         tokenized_passage = [e if e[-1] == "." else e + ["."] for e in tokenized_passage if len(e) > 1]
         is_segmented = True
 
@@ -272,6 +286,8 @@ class QuestionSampler:
             output = self.run_input_sampling_parallel(tokenized_passage, is_segmented=is_segmented)
             entity_dict = output.pop(0)
             for ele in output:
+                if ele[ANSWER] in answer_lst or any(ele[ANSWER] in _pre for _pre in answer_lst):
+                    continue
                 passage_lst.append(ele[PASSAGE])
                 answer_lst.append(ele[ANSWER])
                 ques_type_lst.append(ele[QUESTION_TYPE])
@@ -299,11 +315,11 @@ class QuestionSampler:
             return []
 
         samplings = []
-        print(f"START INFERENCE {len(passage_lst)} examples with batch_size {self.inference_batch_size} ...")
-        # start_gen = time.time()
+        self.logger.info(f"START INFERENCE {len(passage_lst)} examples with batch_size {self.inference_batch_size} ...")
+        start_gen = time.time()
         predict_pointer = self.inference(processed_passages=passage_lst, num_return_sequences=num_return_sequences,
                                          num_beams=num_beams)
-        # print('Gen TIME: ', time.time() - start_gen)
+        self.logger.info('Gen TIME: ', time.time() - start_gen)
 
         for idx, p in enumerate(passage_lst):
             example = {

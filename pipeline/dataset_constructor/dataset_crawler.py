@@ -23,6 +23,7 @@ class QGCrawler:
         output_folder = f"{self.config.pipeline_dataset_folder}/raw"
         check_exist_folder(output_folder)
         self.output_folder = output_folder
+        self.output_queue = Queue(maxsize=10000)
 
     def prompt_sentence(self, pasage: str):
         return f"Generate 10 extractive questions in Vietnamese from the following passage (questions must be about information included in the passage, ask questions as specific as possible, and question is Wh-question). Passage: {pasage}"
@@ -57,7 +58,11 @@ class QGCrawler:
             question_lst = self.make_request(content=self.prompt_sentence(passage=data[1]))
             for q in question_lst:
                 answer = self.qa_api(context=data[1], question=q)["data"][ANSWER].replace("_", " ")
+                self.output_queue.put()
             bar.update(1)
+
+    def write_output(self):
+        pass
 
     def run(self):
         input_queue = Queue(maxsize=10000)
@@ -81,3 +86,7 @@ class QGCrawler:
             if "all" in f:
                 output += load_file(f"{self.output_folder}/{f}")
         self.save_dataset(output)
+
+
+if __name__ == "__main__":
+    pass

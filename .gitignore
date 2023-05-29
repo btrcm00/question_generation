@@ -1,5 +1,3 @@
-dataset/*
-!dataset/*.dvc
 runs/
 __pycache__/
 QuestionAnswering_Generation.egg-info/

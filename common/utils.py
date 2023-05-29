@@ -6,12 +6,16 @@ import numpy as np
 import requests
 import string
 import logging
+import json
+import hashlib
 
 import regex as re
 from googletrans import Translator
 from nltk import tokenize as nltk_tokenizer
 from queue import Queue
 from threading import Event
+from string import punctuation
+from typing import Tuple, List
 
 from common.common_keys import *
 from common.config import *
@@ -39,16 +43,22 @@ def post_process(func):
     return _post_process
 
 
+def base_pre_process(passage):
+    passage = tone_normalization(passage)
+    # passage = passage.replace("_", " ").replace("\"", "'")
+    passage = re.sub(r"\s\"\s", r" ", passage)
+    passage = re.sub(r"(\s*)(\W)\W+", r"\1\2", passage)
+    passage = re.sub(r"([^\d\W])([\.,:;])([^\d\W])", r"\1\2 \3", passage)
+    passage = re.sub(r"([^\d\W])([\.,:;])(\d)", r"\1\2 \3", passage)
+    passage = re.sub(r"(\d)([\.,:;])([^\d\W])", r"\1\2 \3", passage)
+    return passage
+
+
 def pre_process(func):
     def _pre_process(*args, **kwargs):
         passage = kwargs.get("passage")
 
-        passage = tone_normalization(passage)
-        # passage = passage.replace("_", " ").replace("\"", "'")
-        passage = re.sub(r"\s\"\s", r" ", passage)
-        passage = re.sub(r"([^\d\W])([\.,:;])([^\d\W])", r"\1\2 \3", passage)
-        passage = re.sub(r"([^\d\W])([\.,:;])(\d)", r"\1\2 \3", passage)
-        passage = re.sub(r"(\d)([\.,:;])([^\d\W])", r"\1\2 \3", passage)
+        passage = base_pre_process(passage=passage)
         # passage = re.sub(r"([\.,;]) ([A-Z]|[{}])".format(VIETNAMESE_RE), r". \2",
         #                  passage)
         kwargs["passage"] = passage
@@ -179,6 +189,260 @@ def timer(func):
     return _timer
 
 
+class VietnameseTextNormalizer:
+    vowels_pattern = re.compile(
+        r'à|á|ả|ã|ạ|ầ|ấ|ẩ|ẫ|ậ|ằ|ắ|ẳ|ẵ|ặ|è|é|ẻ|ẽ|ẹ|'
+        r'ề|ế|ể|ễ|ệ|ì|í|ỉ|ĩ|ị|ò|ó|ỏ|õ|ọ|ồ|ố|ổ|ỗ|ộ|ờ|ớ|ở|ỡ|ợ|'
+        r'ù|ú|ủ|ũ|ụ|ừ|ứ|ử|ữ|ự|ỳ|ý|ỷ|ỹ|ỵ|'
+        r'À|Á|Ả|Ã|Ạ|Ầ|Ấ|Ẩ|Ẫ|Ậ|Ằ|Ắ|Ẳ|Ẵ|Ặ|È|É|Ẻ|Ẽ|Ẹ|Ề|Ế|Ể|Ễ|Ệ|Ì|Í|Ỉ|Ĩ|Ị|'
+        r'Ò|Ó|Ỏ|Õ|Ọ|Ồ|Ố|Ổ|Ỗ|Ộ|Ờ|Ớ|Ở|Ỡ|Ợ|Ù|Ú|Ủ|Ũ|Ụ|Ừ|Ứ|Ử|Ữ|Ự|Ỳ|Ý|Ỷ|Ỹ|Ỵ'
+    )
+    component_pattern = re.compile(r'(^\p{P}*)([p{L}.]*\p{L}+)(\p{P}*$)')
+
+    def convert_unicode(self, text: str) -> str:
+        """
+        :param text: input text
+        :return: utf-8 encoded text
+        """
+        character_map = dict()
+        char1252 = "à|á|ả|ã|ạ|ầ|ấ|ẩ|ẫ|ậ|ằ|ắ|ẳ|ẵ|ặ|è|é|ẻ|ẽ|ẹ|" \
+                   "ề|ế|ể|ễ|ệ|ì|í|ỉ|ĩ|ị|ò|ó|ỏ|õ|ọ|ồ|ố|ổ|ỗ|ộ|ờ|ớ|ở|" \
+                   "ỡ|ợ|ù|ú|ủ|ũ|ụ|ừ|ứ|ử|ữ|ự|ỳ|ý|ỷ|ỹ|ỵ|" \
+                   "À|Á|Ả|Ã|Ạ|Ầ|Ấ|Ẩ|Ẫ|Ậ|Ằ|Ắ|Ẳ|Ẵ|Ặ|È|É|Ẻ|Ẽ|Ẹ|Ề|Ế|Ể|Ễ|Ệ|Ì|" \
+                   "Í|Ỉ|Ĩ|Ị|Ò|Ó|Ỏ|Õ|Ọ|Ồ|Ố|Ổ|Ỗ|Ộ|Ờ|" \
+                   "Ớ|Ở|Ỡ|Ợ|Ù|Ú|Ủ|Ũ|Ụ|Ừ|Ứ|Ử|Ữ|Ự|Ỳ|Ý|Ỷ|Ỹ|Ỵ".split('|')
+
+        charutf8 = "à|á|ả|ã|ạ|ầ|ấ|ẩ|ẫ|ậ|ằ|ắ|ẳ|ẵ|ặ|è|é|ẻ|ẽ|ẹ|ề|ế|ể|ễ|ệ|ì|í|ỉ|ĩ|ị|ò|ó|ỏ|õ|ọ|ồ|ố|ổ|ỗ|ộ|ờ|ớ|ở|" \
+                   "ỡ|ợ|ù|ú|ủ|ũ|ụ|ừ|ứ|ử|ữ|ự|ỳ|ý|ỷ|ỹ|ỵ|À|Á|Ả|Ã|Ạ|Ầ|Ấ|Ẩ|Ẫ|Ậ|Ằ|Ắ|Ẳ|Ẵ|Ặ|È|É|Ẻ|Ẽ|Ẹ|Ề|Ế|Ể|Ễ|Ệ|Ì|" \
+                   "Í|Ỉ|Ĩ|Ị|Ò|Ó|Ỏ|Õ|Ọ|Ồ|Ố|Ổ|Ỗ|Ộ|Ờ|Ớ|Ở|Ỡ|Ợ|Ù|Ú|Ủ|Ũ|Ụ|Ừ|Ứ|Ử|Ữ|Ự|Ỳ|Ý|Ỷ|Ỹ|Ỵ".split('|')
+
+        for i in range(len(char1252)):
+            character_map[char1252[i]] = charutf8[i]
+
+        return self.vowels_pattern.sub(lambda x: character_map[x.group()], text)
+
+    @staticmethod
+    def normalize_mark(word: str) -> str:
+        """
+        Normalize vietnamese mark_idx with modern style
+        :param word: input word (must be lower case)
+        :return: normalized word
+        >>> text_norm = VietnameseTextNormalizer()
+        >>> text_norm.normalize_mark('Thuỵ')
+        >>> "Thụy"
+        """
+        vowels = [['a', 'à', 'á', 'ả', 'ã', 'ạ'],
+                  ['ă', 'ằ', 'ắ', 'ẳ', 'ẵ', 'ặ'],
+                  ['â', 'ầ', 'ấ', 'ẩ', 'ẫ', 'ậ'],
+                  ['e', 'è', 'é', 'ẻ', 'ẽ', 'ẹ'],
+                  ['ê', 'ề', 'ế', 'ể', 'ễ', 'ệ'],
+                  ['i', 'ì', 'í', 'ỉ', 'ĩ', 'ị'],
+                  ['o', 'ò', 'ó', 'ỏ', 'õ', 'ọ'],
+                  ['ô', 'ồ', 'ố', 'ổ', 'ỗ', 'ộ'],
+                  ['ơ', 'ờ', 'ớ', 'ở', 'ỡ', 'ợ'],
+                  ['u', 'ù', 'ú', 'ủ', 'ũ', 'ụ'],
+                  ['ư', 'ừ', 'ứ', 'ử', 'ữ', 'ự'],
+                  ['y', 'ỳ', 'ý', 'ỷ', 'ỹ', 'ỵ']]
+
+        vowel_positions = dict()
+        for i in range(len(vowels)):
+            for j in range(len(vowels[i])):
+                vowel_positions[vowels[i][j]] = (i, j)
+
+        # Check whether word is Vietnamese word or not
+        # TODO: The below code idea is not optimal, better fix this or remove
+        # Main idea: If distance between two vowels in a word is greater than 2 index
+        # Then, this word is not a Vietnamese word
+        # Fail cases are non-sense words, e.g hoaua
+
+        chars = list(word)
+        vowel_index = -1
+        for index, char in enumerate(chars):
+            x, y = vowel_positions.get(char, (-1, -1))
+            if x != -1:  # this character is a consonant
+                if vowel_index == -1:
+                    vowel_index = index
+                else:
+                    if index - vowel_index != 1:
+                        return word
+                    vowel_index = index
+        # -----------------------------------------------
+
+        mark_idx = 0
+        vowel_indexes = []
+        qu_or_gi = False
+        for index, char in enumerate(chars):
+            x, y = vowel_positions.get(char, (-1, -1))
+            if x == -1:  # char is a consonant
+                continue
+
+            elif x == 9:  # if char is "u"
+                if index != 0 and chars[index - 1] in 'q':  # if previous char is q
+                    chars[index] = 'u'  # remove mark
+                    qu_or_gi = True
+
+            elif x == 5:  # if char is i
+                if index != 0 and chars[index - 1] == 'g':  # if previous char is g
+                    chars[index] = 'i'  # remove mark
+                    qu_or_gi = True
+
+            # Save the position of the main mark in word
+            if y != 0:
+                mark_idx = y
+                chars[index] = vowels[x][0]  # remove mark
+
+            # Save the position of the vowel in word that doesn't start with qu or gi
+            if not qu_or_gi or index != 1:
+                vowel_indexes.append(index)
+
+        # If the number of vowels in the word is less than 2. E.g: gà, giá, quà
+        if len(vowel_indexes) < 2:
+            if qu_or_gi:
+                if len(chars) == 2:
+                    x, y = vowel_positions.get(chars[1])
+                    chars[1] = vowels[x][mark_idx]  # the mark is in the last letter, E.g: gà
+                else:
+                    x, y = vowel_positions.get(chars[2], (-1, -1))
+                    if x != -1:  # if the last letter is consonant
+                        chars[2] = vowels[x][mark_idx]  # the mask is in the last letter
+                    else:
+                        # I think this fix Ubuntu unikey problems
+                        # Or this is unnecessary since there is such a case like this
+                        chars[1] = vowels[5][mark_idx] if chars[1] == 'i' else vowels[9][mark_idx]
+                return ''.join(chars)
+            return word
+
+        for index in vowel_indexes:
+            x, y = vowel_positions[chars[index]]
+            if x == 4 or x == 8:  # ê, ơ
+                chars[index] = vowels[x][mark_idx]
+                # for index2 in nguyen_am_index:
+                #     if index2 != index:
+                #         x, y = nguyen_am_to_ids[chars[index]]
+                #         chars[index2] = bang_nguyen_am[x][0]
+                return ''.join(chars)
+
+        # If there are more than two vowels in the word
+        if len(vowel_indexes) == 2 and vowel_indexes[-1] == len(chars) - 1:
+            # If the last character is vowel, the mark should be at the first vowel
+            x, y = vowel_positions[chars[vowel_indexes[0]]]
+            chars[vowel_indexes[0]] = vowels[x][mark_idx]
+            # The mark should be at the second vowel
+        else:
+            # The mark should be at the second vowel
+            x, y = vowel_positions[chars[vowel_indexes[1]]]
+            chars[vowel_indexes[1]] = vowels[x][mark_idx]
+
+        return ''.join(chars)
+
+    @staticmethod
+    def reformat(text):
+        for punc in punctuation:
+            text = text.replace(f"{punc}_", f"{punc} ")
+            text = text.replace(f"_{punc}", f" {punc}")
+        return text
+
+    def normalize(self, text: str) -> str:
+        text = self.convert_unicode(self.reformat(text))
+        words = text.split()
+        for i, word in enumerate(words):
+            # Split punctuation at the beginning and after word
+            parts = word.split('_')
+
+            for j, part in enumerate(parts):
+                components = self.component_pattern.sub(r'\1!@#\2!@#\3', part).split('!@#')
+                if len(components) == 3:
+                    mask = [x.isupper() for x in components[1]]
+                    result = self.normalize_mark(components[1].lower())
+                    new_word = ''
+                    for m, r in zip(mask, result):
+                        if m:
+                            r = r.upper()
+                        new_word += r
+                    components[1] = new_word
+                parts[j] = ' '.join(components).strip()
+            concat = True
+            for idx in range(1, len(parts)):
+                if parts[idx][0].isupper() and parts[idx - 1].islower():
+                    concat = False
+                    break
+
+            if concat:
+                words[i] = '_'.join(parts)
+            else:
+                words[i] = ' '.join(parts)
+
+        return ' '.join(words)
+
+
+class TextNormalizer:
+    vn_text_normalize = VietnameseTextNormalizer()
+    non_escape_space = re.compile(r'\s+')
+    valid_chars = re.compile(r"[!\"#$%&\'()*+,-./:;<=>?@\[\\\]^_`{|}~aàáảãạâầấẩẫậăằắẳẵặeèéẻẽẹêềếểễệ"
+                             r"iìíỉĩịoòóỏõọồốôổỗộơờớởỡợuùúủũụưừứửữựyỳýỷỹỵAÀÁẢÃẠÂẦẤẨẪẬĂẰẮẲẴẶEÈÉẺẼẸÊỀẾỂỄỆ"
+                             r"IÌÍỈĨỊOÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢUÙÚỦŨỤƯỪỨỬỮỰYỲÝỶỸỴ0123456789"
+                             r"bcdđfghjklmnpqrstvwxzBCDFGHJKLMNPQRSTVWXZĐ\s]+")
+    standard_mapping = {
+        "…": "...",
+        "–": "-",
+        "“": "\"",
+        "”": "\"",
+    }
+    punct = punctuation.replace(",", "").replace(".", "")
+    punc_map = {p: f" {p} " for p in punct}
+    punc_pattern = re.compile("[" + re.escape(punct) + "]")
+
+    special_chars_pattern = re.compile(r"[…–“”]")
+
+    def map_non_standard_character(self, text: str) -> str:
+        """
+        Replace some special characters with its standard character
+        """
+        text = self.non_escape_space.sub(" ", text)
+        return self.special_chars_pattern.sub(lambda x: self.standard_mapping[x.group()], text)
+
+    def remove_emoji(self, text: str) -> str:
+        return ' '.join(self.valid_chars.findall(text))
+
+    def normalize_punctuation(self, text: str) -> str:
+        return self.punc_pattern.sub(lambda x: self.punc_map[x.group()], text)
+
+    def normalize(self, text: str, norm_punct: bool = False, norm_mark: bool = False) -> str:
+        """
+        Normalize text
+
+        Params:
+            - text: input text
+            - norm_punct: add spaces before and after punctuation
+            - norm_mark: normalize vietnamese mark. E.g: Thuỵ -> Thụy
+        Return:
+            - normalized text
+        """
+        text = self.remove_emoji(text.strip())
+        text = self.map_non_standard_character(text)
+
+        if norm_mark:
+            text = self.vn_text_normalize.normalize(text)
+
+        if norm_punct:
+            text = self.normalize_punctuation(text)
+        return " ".join(text.split())
+
+    @staticmethod
+    def masking(text: str) -> Tuple[str, List[str]]:
+        """
+        Mask word that contains '_'
+        """
+        masked_words = []
+        words = text.split()
+        for i, word in enumerate(words):
+            if '_' in word:
+                masked_words.append(word)
+                words[i] = 'MASK'
+
+        return ' '.join(words), masked_words
+
+
 class ModelUtils(metaclass=SingletonMeta):
     def __init__(
             self,
@@ -198,12 +462,23 @@ class ModelUtils(metaclass=SingletonMeta):
         similar_entity_tag = json.load(open(SIMILAR_ENTITY_TAG, "r", encoding="utf8"))["similar"]
         self.similar_entity_tag = self.process_similar_tag(similar_entity_tag)
 
+        self.normalizer = TextNormalizer()
+
     def process_similar_tag(self, tag_lst):
         return {
             tag: similar_tag_lst
             for similar_tag_lst in tag_lst
             for tag in similar_tag_lst
         }
+
+    @staticmethod
+    def generate_hash(data):
+        try:
+            json_string = json.dumps(data, sort_keys=True)
+            hash_string = hashlib.md5(json_string.encode("utf-8")).hexdigest()
+        except Exception as e:
+            hash_string = ""
+        return hash_string
 
     @post_process
     def truncate_passage(self, passage: str):
@@ -225,37 +500,46 @@ class ModelUtils(metaclass=SingletonMeta):
 
         passage_splits = [ele + " ." for ele in passage_text.split(" . ")]
         out_passage = copy.deepcopy(passage_splits)
-        while len(self.tokenizer(" ".join([e for ele1 in out_passage for e in ele1.split()]))[
-                      INPUT_IDS]) > self.input_max_length:
-            # retain_idx = [idx for idx, ele in enumerate(out_passage) if not self.special_pattern.search(ele)]
-            # target_idx = [idx for idx, ele in enumerate(out_passage) if self.special_pattern.search(ele)]
-            retain_idx, target_idx = [], []
-            for idx, ele in enumerate(out_passage):
-                if not self.ans_patterns.search(ele):
-                    retain_idx.append(idx)
-                else:
-                    target_idx.append(idx)
 
-            if not retain_idx or not target_idx:
+        target_idx = None
+        tokenized_passage = self.tokenizer.tokenize(" ".join(out_passage))
+        out_passage = " ".join(tokenized_passage).split(" . ")
+        while len(" . ".join(out_passage).split()) > self.input_max_length:
+            retain_idx = [*range(len(out_passage))]
+            if target_idx is None:
+                for idx, ele in enumerate(out_passage):
+                    if self.ans_patterns.search(ele):
+                        target_idx = idx
+                        break
+
+            if not retain_idx or target_idx is None:
                 logger.info(out_passage)
                 logger.info(len([e for ele1 in out_passage for e in ele1.split()]))
                 break
-            target_idx = target_idx[-1]
-            chosen_idx = []
-            if len(retain_idx) <= 2:
-                chosen_idx = retain_idx
-            if retain_idx[-1] < target_idx:
-                chosen_idx = retain_idx[:2]
-            elif retain_idx[0] > target_idx:
-                chosen_idx = retain_idx[-2:]
-            else:
-                chosen_idx = [retain_idx[0], retain_idx[-1]]
-            if not chosen_idx:
+            retain_idx.remove(target_idx)
+            # retain_idx.remove(target_idx)
+            # target_idx = target_idx[-1]
+            if not retain_idx:
+                logger.info("retain_idx is empty")
                 break
-            rm_index = random.choice(chosen_idx)
+            rm_index = None
+            if len(retain_idx) == 1:
+                rm_index = retain_idx.pop(0)
+            elif retain_idx[-1] < target_idx:
+                rm_index = retain_idx.pop(0)
+                target_idx -= 1
+            elif retain_idx[0] > target_idx:
+                rm_index = retain_idx.pop(-1)
+            else:
+                rm_index = retain_idx.pop(random.choice([0, -1]))
+                if rm_index < target_idx:
+                    target_idx -= 1
+            if rm_index is None:
+                logger.info("rm_index is NONE")
+                break
             out_passage.pop(rm_index)
 
-        return " ".join(out_passage)
+        return self.tokenizer.convert_tokens_to_string(" . ".join(out_passage).split()) + " ."
 
     @post_process
     def prepare_model_input(self, passage: str, answer: str, ans_lst: list, ques_type: str, ans_type: str = None, ):
@@ -322,15 +606,7 @@ class ModelUtils(metaclass=SingletonMeta):
 
         # return passage_ans_clue
 
-    @staticmethod
-    def bert_prepare_data(text: str):
-        seg_text = " ".join([e for ele in Config.vncore_nlp.tokenize(text) for e in ele])
-        seg_text = seg_text.replace("< ", "<")
-        seg_text = seg_text.replace("/ ", "/")
-        seg_text = seg_text.replace(" >", ">")
-        return seg_text
-
-    def question_validation(self, passage: str, question: str, answer: str, score: int = 0.4):
+    def question_validation(self, data: BaseQGData, score: int = 0.4):
         """_summary_
         Steps:
             - Entity in question must be in passage
@@ -345,6 +621,7 @@ class ModelUtils(metaclass=SingletonMeta):
         Return:
             bool: True if generated question is valid
         """
+        passage = data.passage
         ques_type = re.findall(f"<.*?>", passage)
         if ques_type and passage.strip().startswith(ques_type[0]):
             passage = passage.replace("{} ".format(ques_type[0]), "")
@@ -366,12 +643,14 @@ class ModelUtils(metaclass=SingletonMeta):
 
         # Overlap tokens ratio between answer and predicted answer from QA model > 0.6
         # try:
-        answer_pred = self.qa_api(context=passage, question=question)["data"][ANSWER].replace("_", " ").replace("₫ ",
-                                                                                                                "₫").replace(
+        answer_pred = self.qa_api(context=passage, question=data.question)["data"][ANSWER].replace("_", " ").replace(
+            "₫ ",
+            "₫").replace(
             " %", "%").split()
         # except:
         #     return False
         # answer_truth = answer.replace("_", " ").split()
+        # logger.info(answer_pred, answer_truth)
         if not answer_truth:
             return False
         if sum([1 if e in answer_pred else 0 for e in answer_truth]) / len(answer_truth) < score:
@@ -387,6 +666,8 @@ class ModelUtils(metaclass=SingletonMeta):
 
     @pre_process
     def tokenize_passage(self, passage: str, depth: int = 0):
+        if depth == 0:
+            passage = self.normalizer.normalize(passage)
         if depth >= 10:
             return []
         try:
@@ -469,8 +750,6 @@ class ModelUtils(metaclass=SingletonMeta):
         for sub_passage in processed_passage:
             if not isinstance(sub_passage, str):
                 logger.info(processed_passage)
-                import sys
-                sys.exit()
             count += 1
             # output = requests.post(url=Config.ner_url,
             #                        json={"text": sub_passage.replace("_", " "), "keep_format": True}).json()
@@ -528,7 +807,7 @@ class ModelUtils(metaclass=SingletonMeta):
         try:
             child_lst = sorted(node["children"], key=lambda t: t["id"])
         except:
-            logger.info(888888888888888, node)
+            logger.info(node)
             child_lst = sorted(node["children"], key=lambda t: t["id"])
 
         for ele in child_lst:
@@ -574,63 +853,6 @@ class ModelUtils(metaclass=SingletonMeta):
 
         return parsing_tree  # parsing_tree.get("ROOT", parsing_tree) if isinstance(parsing_tree, dict) else parsing_tree
 
-    def get_chunk_old(self, passage, tag_lst: list = None, is_segmented: bool = False):
-        """return chunks of sentence
-
-        Args:
-            passage (): __
-            tag_lst (list)
-            is_segmented (bool)
-
-        Returns:
-            list: list of chunks in sentence. [NER_tag, POS_tag, chunk, start_position, end_position]
-        """
-        # split passage into sentences
-        if not tag_lst:
-            tag_lst = ["AP", "PP-MNR"]
-        if is_segmented:
-            sentence_list = [" ".join(ele) for ele in passage]
-        else:
-            if isinstance(passage, list):
-                passage = " ".join(passage).replace("_", " ")
-            sentence_list = [" ".join([e for e in ele]) for ele in Config.vncore_nlp.tokenize(passage)]
-
-        index_sentence_in_passage = np.concatenate(
-            [[0], np.cumsum([len(ele.split()) for idx, ele in enumerate(sentence_list)])])
-
-        def get_sentence_chunk(sent, start_idx: int):
-            try:
-                tree = self.parse_sentence(passage=sent)
-            except Exception as e:
-                logger.info("EROR!!!!!!!!!!!!!", e)
-                return []
-
-            if not isinstance(tree, dict):
-                tree = {
-                    "children": tree
-                }
-                # return []
-            chunk_list = []
-            _, orig_chunk_list = self._navigate(tree, tag_lst=tag_lst)
-            for ele in orig_chunk_list:
-                try:
-                    chunk = [re.sub(r"___\d+", "", e) for e in ele[:-1]]
-
-                    start_pos = int(ele[0].split("___")[-1]) - 1
-                    # start_pos = len(" ".join(sent.split()[:start_pos])) + 1
-                    end_pos = int(ele[-2].split("___")[-1]) - 1
-                    # end_pos = start_pos + len(" ".join(chunk))
-                    chunk_list.append((None, ele[-1], chunk, int(start_pos + start_idx),
-                                       int(end_pos + start_idx)))
-                except Exception as e:
-                    logger.info('Exception in Chunking: ', e)
-                    continue
-
-            return chunk_list
-
-        return [e for sent, start_idx in zip(sentence_list, index_sentence_in_passage) for e in
-                get_sentence_chunk(sent, start_idx)], " ".join(sentence_list).split()
-
     def get_chunk(self, passage, tag_lst: list = None, is_segmented: bool = False):
         """return chunks of sentence
 
@@ -650,19 +872,25 @@ class ModelUtils(metaclass=SingletonMeta):
             if isinstance(passage, list):
                 passage = " ".join(passage).replace("_", " ")
             sentence_list = [" ".join(ele) for ele in Config.vncore_nlp.tokenize(passage)]
-            # sentence_list = Config.vncore_nlp.tokenize(passage)
 
         index_sentence_in_passage = np.concatenate(
             [[0], np.cumsum([len(ele.split()) for ele in sentence_list])])
-        # _passage = " ".join([" ".join(ele).replace("_", " ") for ele in sentence_list])
         _passage = " ".join(sentence_list).replace("_", " ")
-        # _passage = passage
-
         try:
             tree = self.parse_sentence(passage=_passage)
         except Exception as e:
-            logger.info("EROR!!!!!!!!!!!!!", e)
-            return []
+            logger.error(f">> ERROR WHEN PARSE ALL PASSAGE << | {e}")
+            tree = []
+            for sub in sentence_list:
+                try:
+                    sub_ = self.parse_sentence(passage=sub.replace("_", " "))
+                except:
+                    sub_ = [{}]
+                tree += sub_
+
+        if len(tree) + 1 != len(index_sentence_in_passage):
+            logger.error(
+                f"len(tree)+1 should equal len(index_sentence_in_passage), but {len(tree)} + 1 != {len(index_sentence_in_passage)}")
 
         def process_sub_tree(sub_tree, start_idx):
             chunk_list = []
@@ -676,21 +904,22 @@ class ModelUtils(metaclass=SingletonMeta):
                     chunk_list.append((None, ele[-1], chunk, int(start_pos + start_idx),
                                        int(end_pos + start_idx)))
                 except Exception as e:
-                    logger.info('Exception in Chunking: ', e)
+                    logger.info(f'Exception in Chunking: {e}')
                     continue
 
             return chunk_list
 
         output = []
-        pre_idx = 0
         for idx, sub_tree in enumerate(tree):
+            if sub_tree == {}:
+                continue
             output += process_sub_tree(sub_tree=sub_tree["ROOT"], start_idx=index_sentence_in_passage[idx])
-
         return output
 
 
 if __name__ == "__main__":
     utils = ModelUtils(input_max_length=512, tokenizer=None)
-    logger.info(utils.get_chunk(
+    print(utils.get_chunk(
         "Một quả bóng quần vợt hay bóng tennis là một quả bóng có độ nẩy khi va đập , thiết kế cho môn thể thao quần vợt , nhưng cũng được dùng cho một số môn thể thao khác như squash tennis hay lotball . Những quả bóng quần vợt đầu tiên trong lịch sử được làm bằng da nhồi lông hay len . Từ thế kỷ 18 trở đi , một dải len rộng ¾ inch được quấn chặt quanh một nhân , rồi được buộc xung quanh bằng các sợi dây và bọc bên ngoài bằng vải trắng . Loại bóng này , được cải tiến với lõi gỗ bấc , vẫn được dùng trong môn real tennis ngày nay . Những năm 1870 , luật quần vợt quy định dùng cao su làm bóng , và các quả bóng được xếp trong ống khi vận chuyển , thường mỗi ống chứa bốn quả . Một quả bóng quần vợt hiện đại thông thường bao giờ cũng gồm hai phần , phần ruột và vỏ . Phần ruột được làm từ cao su rỗng ( lõi ) và phần vỏ phủ ra bên ngoài là chất liệu len ( nỉ ) . Hiện nay , bóng tennis có hai màu chính được phép sử dụng ở các giải đấu là trắng và vàng xanh . Bóng tennis có đường kính từ 2,5 inch ( 6,25 cm ) đến 2,63 inch ( 6,57 cm ) và có trọng lượng trong khoảng từ 56 gam đến 59,4 gam . Theo những quy định trong luật tennis , khi được thả từ độ cao 100 inch ( 254 cm ) xuống nền xi măng , bóng phải có độ nảy từ 53 đến 58 inch ( 135 đến 147 cm ) .",
         tag_lst=["QP"]))
+

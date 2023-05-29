@@ -2,9 +2,14 @@ from typing import Dict, Union, Any, Optional, List
 
 import torch
 from torch import nn
+import datasets
+from torch.utils.data import DataLoader
 from transformers.trainer_seq2seq import Seq2SeqTrainer
 from transformers.deepspeed import is_deepspeed_zero3_enabled
+from transformers.trainer_pt_utils import IterableDatasetShard
+from transformers.trainer import is_datasets_available
 
+import datasets
 from transformers import (
     SchedulerType,
     get_linear_schedule_with_warmup,

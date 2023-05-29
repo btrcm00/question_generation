@@ -1,9 +1,11 @@
 import argparse
+import datetime
+import pytz
 from flask import Flask, request, jsonify
 
 from common.common_keys import *
 from common.config import PipelineConfig, Config
-from pipeline.inference.sampling_pipeline import QuestionSampler
+from pipeline.inference.base_pipeline import QuestionSampler
 # from inference.refactor_pipeline import QuestionSampler
 from common.constants import *
 from pipeline.trainer.model.bartpho import BartPhoPointer
@@ -18,7 +20,8 @@ os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 def api_config():
     parser = argparse.ArgumentParser()
     # parser.add_argument("--folder_checkpoint", default=OUTPUT_PATH + "/checkpoint/checkpoint_bart_16_3/", type=str)
-    parser.add_argument("--folder_checkpoint", default=OUTPUT_PATH + "/checkpoint/checkpoint_bart_20_3_all_data/",
+    parser.add_argument("--folder_checkpoint",
+                        default=f"{INFERENCE_PATH}/checkpoint/bartpho_all_chatgptdata_all_steps_partial_no_questype_27_3",
                         type=str)
     parser.add_argument('--input_max_length', default=512, type=int,
                         help='maximum context token number')
@@ -36,6 +39,7 @@ def api_config():
 
 
 config, _ = api_config()
+deploy_time = datetime.datetime.now(pytz.timezone("Asia/SaiGon")).strftime('%H:%M:%S_%d/%m/%Y')
 pipeline_config = PipelineConfig(
     training_output_dir=config.folder_checkpoint,
     pipeline_input_max_length=config.input_max_length,
@@ -61,7 +65,9 @@ def bart_predict():
     output = sampler.predict(data, num_beams=num_beams, num_return_sequences=num_return_sequences)
 
     return jsonify({
-        "bart_generated_question": output
+        "checkpoint": sampler.best_checkpoint_path.split("/")[-1],
+        "latest-deploy-time": deploy_time,
+        "predict": output.dict()
     })
 
 
@@ -72,10 +78,14 @@ def bart_samplings():
         if ele not in data.keys():
             return {'suggest_reply': 'ERROR NOT ENOUGH PARAM', 'id_job': '', 'check_end': True}
 
-    output = sampler.sampling(**data)
+    output, processed_passage = sampler.sampling(**data)
     return jsonify({
-        "bart_samplings": output
+        "checkpoint": sampler.best_checkpoint_path.split("/")[-1],
+        "latest-deploy-time": deploy_time,
+        "processed_passage": processed_passage,
+        **output.dict()
     })
+    # return jsonify({**_output, **output.dict()})
 
 
 def create_app():

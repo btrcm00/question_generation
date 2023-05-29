@@ -9,7 +9,9 @@ from transformers import AutoTokenizer
 
 from common.constants import TONE_MAPPING_PATH
 from common.config import Config, SingletonMeta
-from trainer.model.bartpho import BartPhoPointer
+
+
+# from trainer.model.bartpho import BartPhoPointer
 
 
 class Normalizer(metaclass=SingletonMeta):
@@ -95,7 +97,6 @@ class Normalizer(metaclass=SingletonMeta):
                 example["new details"] = self.extract_key_value(example["Description"])
                 output.append(example)
 
-            print(len(output))
             json.dump(output, open(f"{output_folder}/{f}", "w", encoding="utf8"), ensure_ascii=False, indent=4)
 
 
@@ -103,42 +104,51 @@ class ShopeeProcessor:
     def __init__(self, model_path: str):
         self.normalizer = Normalizer()
 
-        self.qg_model = BartPhoPointer.from_pretrained(model_path, training_config={"use_pointer": True})
-        self.qg_tokenizer = AutoTokenizer.from_pretrained(model_path)
+        # self.qg_model = BartPhoPointer.from_pretrained(model_path, training_config={"use_pointer": True})
+        # self.qg_tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-    def load_data(self, input_folder: str):
+    def process(self, input_folder: str, _type: str):
         all_files = os.listdir(input_folder)
-        for f in tqdm(all_files[20:]):
+        output1 = []
+        for f in tqdm(all_files):
             output = []
             data = json.load(open(f"{input_folder}/{f}", "r", encoding="utf8"))
             if not isinstance(data, list):
-                continue
+                # continue
+                data = [data]
+            _id = data[-1]["_id"]
             for ele in data:
+                if ele is None:
+                    continue
                 additional_details = {
-                    k.lower(): v
-                    for k, v in ele["new details"].items() if
+                    k.lower(): v if isinstance(v, str) else ", ".join(v)
+                    for k, v in ele.get("new details", {}).items() if
                     len(k.split()) <= 5 and not k.lower().startswith("thông tin sản phẩm")
                 }
-                shop_infor = ele["Shop information"]
-                if "Thông tin chi tiết" in shop_infor:
-                    shop_infor = {
-                        k.lower(): v
-                        for k, v in ele["Shop information"]["Thông tin chi tiết"].items()
-                    }
-                else:
-                    shop_infor = {}
+                # shop_infor = ele["shop_information"]
+                # if shop_infor is not None and "thông_tin_chi_tiết" in shop_infor:
+                #     shop_infor = {
+                #         k.lower(): v
+                #         for k, v in ele["shop_information"]["thông_tin_chi_tiết"].items()
+                #     }
+                # else:
+                #     shop_infor = {}
+                shop_infor = {}
 
-                main_infor = ele["Main information"]
+                main_infor = ele["main_information"]
                 main_infor_dict = {}
                 for k, v in main_infor.items():
-                    if k == "Name":
-                        main_infor_dict["tên sản phẩm"] = v
+                    if k == "name":
+                        main_infor_dict["tên sản phẩm"] = v if isinstance(v, str) else ", ".join(v)
                     elif isinstance(v, list):
                         main_infor_dict[k.lower()] = ", ".join(v)
 
+                detail = ele.get("detail", {})
+                if detail is None:
+                    detail = {}
                 detail_infor = {
-                    k.lower(): v
-                    for k, v in ele["Detail"].items() if k.lower() != "danh mục"
+                    k.lower(): v if isinstance(v, str) else ", ".join(v)
+                    for k, v in detail.items() if k.lower() != "danh_mục"
                 }
                 output.append({
                     k: v[0] + v[1:].lower() if v.isupper() else v
@@ -151,5 +161,17 @@ class ShopeeProcessor:
                 })
                 st = ""
                 for k, v in output[-1].items():
-                    st += k + " " + v + ". "
-                output.append(self.normalizer.remove_special_tokens(st))
+                    st += k + " : " + v + ". "
+                output1.append({"_id": _id, "info": self.normalizer.remove_special_tokens(st), "type": "sản phẩm",
+                                "categore": _type})
+        return output1
+
+
+if __name__ == "__main__":
+    processor = ShopeeProcessor(model_path="")
+
+    input_folder = "/TMTAI/FileShare/Public/Data/shopee/shopee_ver_4"
+    for _type in tqdm(os.listdir(input_folder)[-2:]):
+        print("======", _type)
+        json.dump(processor.process(f"{input_folder}/{_type}/text", _type=_type),
+                  open(f"temp_dataset/{_type}.json", "w", encoding="utf8"), indent=4, ensure_ascii=False)

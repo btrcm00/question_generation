@@ -6,11 +6,11 @@
 
 - The goal of this task is to generate more data for QA tasks.
 
-- Model: [BERT2BERT](https://huggingface.co/blog/warm-starting-encoder-decoder) and BERT2BERT+[Pointer](https://arxiv.org/abs/1704.04368)
+- Model: BartPho+[Pointer](https://arxiv.org/abs/1704.04368)
 - Dataset:
-  - Train: 55000
-  - Dev: 2000
-  - Test: 2000
+  - Train: ~340000
+  - Dev: ~12000
+  - Test: ~12000
 
 ## How to use
 
@@ -19,7 +19,7 @@
 
 ```
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_folder)
-    model = QG_EncoderDecoderModel.from_pretrained(checkpoint_folder, training_config={"use_pointer": True, "logging_dir": ""})
+    model = BartPhoPointer.from_pretrained(checkpoint_folder, training_config={"use_pointer": True, "logging_dir": ""})
 ```
 
 - example form:
@@ -33,9 +33,27 @@
 
     - Mark clue in passage with <CLUE> and </CLUE>
     - Mark answer in passage with tags as <ORG></ORG>, <PERSON></PERSON>, <LOC></LOC>, ... corresponding to NER tag of answer
-        ex: <PERSON>Nguyễn Trần Hiếu</PERSON>, <ORG>TMT</ORG>, ...
+        ex: <ORG>TMT</ORG>, ...
     - Choose question type that you want [What, Who, When, ...]
 
 - You can see code to predict in /inference/predict.py
 
 ## API (updating ...)
+
+## How to run ?
+
+- Clone repo
+- Create .env file and add some environment variables
+    - if you want to pull data or checkpoint, you have to define STORAGE in .env file
+
+Basic command: `bash pipeline/pipeline.sh <mode> <args>`
+- `<mode>` is one of [train, sampling, prepare_data, all]
+- `<args>` is the args to pass to module
+- Read pipeline/pipeline.sh file for understanding detail flow
+
+!!! .env file in source directory contain all of pipeline environment variables
+And pipeline/scripts/env/*.env files contain specific variables for each sub module
+
+examle:
+`bash pipeline/pipeline.sh train`
+`bash pipeline/pipeline.sh api --parallel_input_processing`

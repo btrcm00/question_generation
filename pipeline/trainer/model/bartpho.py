@@ -114,7 +114,6 @@ class BartPhoPointer(MBartForConditionalGeneration):
             use_cache = False
             if decoder_input_ids is None:
                 decoder_input_ids = shift_tokens_right(labels, self.config.pad_token_id)
-
         outputs = self.model(
             input_ids,
             attention_mask=attention_mask,

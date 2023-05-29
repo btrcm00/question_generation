@@ -16,6 +16,7 @@ class QGPipeline:
     def run(self):
         self.dataset_constructor = DatasetConstructor(constructor_config=self.config)
         self.dataset_constructor.run()
+
         self.trainer = ModelTrainer(config=self.config)
         self.trainer.run()
 

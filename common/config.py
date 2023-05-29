@@ -4,6 +4,8 @@ from enum import Enum
 
 from dotenv import load_dotenv
 from vncorenlp import VnCoreNLP
+from typing import Dict, Optional, List
+from pydantic import BaseModel
 
 from common.constants import *
 from common.common_keys import *
@@ -54,8 +56,64 @@ class Config(metaclass=SingletonMeta):
     stop_word_lst = open(STOP_WORD_PATH, "r", encoding="utf8").readlines()
     stop_word_lst = [w[:-1] for w in stop_word_lst]
 
-    ques_type_config = json.load(open(DATA_PATH + "/sampling_questype_ner.json", "r", encoding="utf8"))
-    tone_mapping = json.load(open(DATA_PATH + "/tone_mapping.json", "r", encoding="utf8"))
+    ques_type_config = json.load(open(DATA_PATH + "/utils/sampling_questype_ner.json", "r", encoding="utf8"))
+    tone_mapping = json.load(open(DATA_PATH + "/utils/tone_mapping.json", "r", encoding="utf8"))
+
+
+class QuestionType(Enum):
+    WHO = 1
+    WHERE = 2
+    WHEN = 3
+    WHY = 4
+    WHICH = 5
+    WHAT = 6
+    HOW_MANY = 7
+    HOW_FAR = 8
+    HOW_LONG = 9
+    HOW = 10
+    OTHER = 11
+
+
+class ModelInputTag:
+    clue = "<CLUE>"
+    close_clue = "</CLUE>"
+    answer = "<ANS>"
+    close_answer = "</ANS>"
+
+
+class SamplingType(Enum):
+    SHOPEE = "shopee"
+    WIKI = "wiki"
+    TGDD = "tgdd"
+    SQUAD = "squad"
+    TINHTE = "tinhte"
+
+
+class BaseQAData(BaseModel):
+    title: Optional[str]
+    id: str
+    context: str
+    question: str
+    answer: Dict[str, List]
+
+
+class BaseQGData(BaseModel):
+    id: str
+    passage: str
+    question: Optional[List[str]]
+    answer: str
+    question_type: Optional[str]
+
+
+class BaseSamplingData(BaseModel):
+    data: BaseQGData
+    verified: Optional[bool]
+
+
+class SamplingData(BaseModel):
+    sampling: List[BaseSamplingData]
+    entity_dict: Optional[Dict]
+    original: Optional[Dict]
 
 
 class PipelineConfig:
@@ -85,6 +143,7 @@ class PipelineConfig:
                  pipeline_special_tokens_path: str = None,
                  pipeline_device: str = None,
                  pipeline_checkpoint_type: str = None,
+                 pipeline_onnx: bool = None,
 
                  constructor_num_of_threads: int = None,
                  constructor_ratio: list = None,
@@ -149,6 +208,7 @@ class PipelineConfig:
             else os.getenv(PIPELINE_DEVICE, "cpu")
         self.pipeline_checkpoint_type = pipeline_checkpoint_type if pipeline_checkpoint_type is not None else os.getenv(
             PIPELINE_CHECKPOINT_TYPE, "best")
+        self.pipeline_onnx = pipeline_onnx if pipeline_onnx is not None  else True
 
         self.constructor_num_of_threads = constructor_num_of_threads if constructor_num_of_threads is not None \
             else int(os.getenv(CONSTRUCTOR_NUM_OF_THREADS, "5"))
@@ -158,7 +218,6 @@ class PipelineConfig:
         while self.constructor_ratio is not None and not isinstance(self.constructor_ratio, list) and count < 5:
             self.constructor_ratio = eval(self.constructor_ratio)
             count += 1
-
         self.constructor_crawler_key = os.getenv(CONSTRUCTOR_CRAWLER_KEY)
         self.constructor_openai_model = os.getenv(CONSTRUCTOR_OPENAI_MODEL)
 
@@ -178,32 +237,3 @@ class PipelineConfig:
         self.logging_folder = logging_folder if logging_folder is not None else os.getenv(LOG_FOLDER, "logs")
         self.log_file = log_file if log_file is not None else os.getenv(LOG_FILE, "app.log")
         setup_logging(logging_folder=self.logging_folder, log_name=self.log_file)
-
-
-class QuestionType(Enum):
-    WHO = 1
-    WHERE = 2
-    WHEN = 3
-    WHY = 4
-    WHICH = 5
-    WHAT = 6
-    HOW_MANY = 7
-    HOW_FAR = 8
-    HOW_LONG = 9
-    HOW = 10
-    OTHER = 11
-
-
-class ModelInputTag:
-    clue = "<CLUE>"
-    close_clue = "</CLUE>"
-    answer = "<ANS>"
-    close_answer = "</ANS>"
-
-
-class SamplingType(Enum):
-    SHOPEE = "shopee"
-    WIKI = "wiki"
-    TGDD = "tgdd"
-    SQUAD = "squad"
-    TINHTE = "tinhte"

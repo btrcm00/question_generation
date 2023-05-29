@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import random
 import json
@@ -6,12 +8,11 @@ import logging
 
 import regex as re
 from torch.utils.data import Dataset
-from transformers import AutoTokenizer
 
 from common.common_keys import *
 from common.utils import load_file
-from common.config import QuestionType, PipelineConfig
-from common.constants import SPECIAL_TOKENS_PATH
+from common.config import *
+from common.constants import *
 
 
 def get_ner_in_tensor(input_ids, ner_list, tokenizer):
@@ -26,8 +27,7 @@ def get_ner_in_tensor(input_ids, ner_list, tokenizer):
 
 
 class FQG_dataset(Dataset):
-    def __init__(self, config: PipelineConfig = None, mode='train', tokenizer=None, added_new_special_tokens=False,
-                 model_type="marian"):
+    def __init__(self, tokenizer, config: PipelineConfig = None, mode='train'):
         super().__init__()
         assert mode in ["train", "dev", "test"], "train should be 'train', 'dev' or 'test'"
 
@@ -35,39 +35,34 @@ class FQG_dataset(Dataset):
         self.config = config if config is not None else PipelineConfig()
         self.logger = logging.getLogger(self.__class__.__name__)
 
-        if not tokenizer:
-            assert self.config.pipeline_pretrained_path is not None, "You have to specify tokenizer path if tokenizer is None"
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.pipeline_pretrained_path, use_fast=False)
-        else:
-            self.tokenizer = tokenizer
+        self.tokenizer = tokenizer
+        self.data = self.load_data(path=f"{self.config.pipeline_dataset_folder}/processed")
 
-        if not added_new_special_tokens:
-            new_special_tokens = json.load(open(SPECIAL_TOKENS_PATH))[
-                                     SPECIAL_TOKENS] + [e.name for e in QuestionType]
-            new_special_tokens = list(set(new_special_tokens))
-            special_tokens_dict = {"additional_special_tokens": [f"<{tk.upper()}>" for tk in new_special_tokens]}
-            self.tokenizer.add_special_tokens(special_tokens_dict)
-
-        self.data = self.load_data(path=f"{self.config.pipeline_dataset_folder}/processed", mode=mode)
-        self.model_type = model_type
+        remove_tokens: list = json.load(open(REMOVE_TOKENS_PATH, "r", encoding="utf8"))["tokens"]
+        self.remove_tokens_pattern = "|".join(remove_tokens)
 
     def __len__(self):
         return len(self.data)
 
+    def pre_process(self, data: dict):
+        clean_data = {}
+        for key, value in data.items():
+            clean_data[key] = re.sub(self.remove_tokens_pattern, "", value) if isinstance(value, str) else value
+        return clean_data
+
     def __getitem__(self, idx: int):
         data_item = self.data[idx]
+        data_item = self.pre_process(data_item)
 
-        in_text = data_item[MODEL_INPUT].replace("\u200b", "")
+        in_text = data_item[MODEL_INPUT]
         in_text = re.sub(r"( \.)+", " .", in_text)
-        # ques_type_token = "<" + data_item[MODEL_QUESTION_TYPE_INPUT].upper().replace(" ", "_") + ">"
-        # inputs = ques_type_token + " " + in_text
         if data_item[MODEL_QUESTION_TYPE_INPUT].upper() == "OTHER" or random.randint(0, 1000) < 200:
             in_text = in_text.replace("<" + data_item[MODEL_QUESTION_TYPE_INPUT].upper() + "> ", "")
 
         passage_tokenized = self.tokenizer(in_text, padding="max_length",
                                            max_length=self.config.pipeline_input_max_length, truncation=True)
 
-        processed_labels = data_item[MODEL_LABEL].replace("\u200b", "")
+        processed_labels = data_item[MODEL_LABEL]
         labels = self.tokenizer(processed_labels, padding="max_length",
                                 max_length=self.config.pipeline_output_max_length, truncation=True).input_ids  # [1:]
         labels = [-100 if token == self.tokenizer.pad_token_id else token for token in labels]
@@ -84,35 +79,26 @@ class FQG_dataset(Dataset):
             LABEL: labels
         }
 
-    def load_data(self, path: str, mode: str):
+    def load_data(self, path: str):
         data = []
         for file in os.listdir(path):
-            if mode in file:  # and file.endswith(".pkl"):
+            if self.mode in file and file.endswith(".pkl"):
                 data += load_file(f"{path}/{file}")
                 data = [ele for ele in data if ele[MODEL_QUESTION_TYPE_INPUT].upper() not in ["BOOLEAN", "OTHER"] or (
                         ele[MODEL_QUESTION_TYPE_INPUT].upper() == "OTHER" and random.randint(0, 1000) < 100)]
         random.shuffle(data)
-        self.logger.info(f"Loaded {len(data)} examples in {mode} dataset ...")
-        if mode == "dev":
+        self.logger.info(f"Loaded {len(data)} examples in {self.mode} dataset ...")
+        if self.mode in ["dev","test"]:
             return data[:2000]
         return data
 
     @staticmethod
-    def get_dataset(config: PipelineConfig = None, mode: str = None, tokenizer=None,
-                    added_new_special_tokens: bool = False,
-                    model_type: str = None):
-        tok = None
-        if tokenizer:
-            tok = tokenizer
-
+    def get_dataset(tokenizer, config: PipelineConfig = None, mode: str = None):
         if mode is not None:
-            return FQG_dataset(config=config, mode=mode, tokenizer=tok)
+            return FQG_dataset(config=config, mode=mode, tokenizer=tokenizer)
         else:
-            train_dataset = FQG_dataset(config=config, mode="train", tokenizer=tok,
-                                        added_new_special_tokens=added_new_special_tokens, model_type=model_type)
-            dev_dataset = FQG_dataset(config=config, mode="dev", tokenizer=tok,
-                                      added_new_special_tokens=added_new_special_tokens, model_type=model_type)
-            test_dataset = FQG_dataset(config=config, mode="test", tokenizer=tok,
-                                       added_new_special_tokens=added_new_special_tokens, model_type=model_type)
+            train_dataset = FQG_dataset(config=config, mode="train", tokenizer=tokenizer)
+            dev_dataset = FQG_dataset(config=config, mode="dev", tokenizer=tokenizer)
+            test_dataset = FQG_dataset(config=config, mode="test", tokenizer=tokenizer)
 
             return train_dataset, dev_dataset, test_dataset

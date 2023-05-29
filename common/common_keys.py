@@ -1,7 +1,6 @@
 CHECKPOINT_TO_USE = "newest_pointer_checkpoint"
 
 MODEL_INPUT = "passage_ans_clue"
-# MODEL_INPUT = "passage"
 MODEL_QUESTION_TYPE_INPUT = "ques_type"
 MODEL_ENTITY_DICT_INPUT = "entity_dict"
 MODEL_LABEL = "ques_ans_label"
@@ -21,8 +20,11 @@ ENTITY_WEIGHT = "entity_weight"
 PREDICTED_QUESTION = "predict_pointer"
 LABEL = "labels"
 
+ID = "id"
+TITLE = "title"
 VERIFIED = "verified"
 EXAMPLE_ID = "_id"
+PASSAGE_ID = "passage_id"
 
 PARSING_URL="PARSING_URL"
 NER_URL="NER_URL"

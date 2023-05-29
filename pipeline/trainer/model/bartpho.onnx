@@ -1,0 +1,39 @@
+import torch
+from typing import Mapping, Optional, Union
+from transformers.models.mbart.configuration_mbart import MBartOnnxConfig
+
+
+class BartPhoPointerOnnxConfig(MBartOnnxConfig):
+    @property
+    def inputs(self):
+        _inputs = super().inputs
+        _inputs["entity_weight"] = {0: "batch", 1: "decoder_sequence"}
+        return _inputs
+
+    def generate_dummy_inputs(
+        self,
+        tokenizer,
+        batch_size: int = -1,
+        seq_length: int = -1,
+        is_pair: bool = False,
+        framework = None,
+    ):
+        _output = super().generate_dummy_inputs(
+            tokenizer=tokenizer,
+            batch_size=batch_size,
+            seq_length=seq_length,
+            is_pair=is_pair,
+            framework=framework
+        )
+        print(_output)
+        print(_output.keys())
+        _output.pop("decoder_token_type_ids")
+        _output.pop("token_type_ids")
+        _output.pop("decoder_input_ids")
+        _output["entity_weight"] = torch.ones((1,256))
+        _output = {
+            "input_ids": _output["input_ids"],
+            "attention_mask": _output["attention_mask"],
+            "entity_weight": _output["entity_weight"]
+        }
+        return _output

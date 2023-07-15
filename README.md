@@ -1,5 +1,8 @@
 # Question Generation
 
+A Pipeline from data construction to model deployment for Question-generation task using BARTPho.
+UPDATING: Add ONNX converter to pipeline for increasing inference performance.
+
 ## Introduce
 
 - Question generation is the task of generating questions from a passage with marked answer, clue and question type that you want to generate.
